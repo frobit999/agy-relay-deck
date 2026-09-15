@@ -1,0 +1,11 @@
+.DS_Store
+.sites-runtime/
+node_modules/
+npm-debug.log*
+*.log
+*.bak
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#070a10">
+  <meta name="panel-token" content="__PANEL_TOKEN_VALUE__">
+  <title>Agy Relay Deck · 本地接力台</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+  <header class="topbar">
+    <a class="brand" href="#" aria-label="Agy Relay Deck 首页">
+      <span class="brand-mark"><i></i><i></i><i></i></span>
+      <span><strong>AGY RELAY</strong><small>LOCAL DECK</small></span>
+    </a>
+    <div class="status-strip">
+      <span class="status-pill local"><i></i>仅在本机</span>
+      <span id="manager-status" class="status-pill"><i></i>Tools 检测中</span>
+      <span id="agy-status" class="status-pill"><i></i>Agy 检测中</span>
+    </div>
+    <button id="refresh" class="icon-button" title="刷新全部状态" aria-label="刷新全部状态">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 8A7 7 0 0 1 18 6l2 2M17.9 16A7 7 0 0 1 6 18l-2-2"/></svg>
+    </button>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div>
+        <p class="eyebrow"><span>CONTROL / 01</span> 上下文接力控制台</p>
+        <h1>额度会清零，<br><em>思路不断线。</em></h1>
+        <p class="intro">把一段超长对话安全嫁接给下一个账号。账号负责额度，本地数据库负责记忆。</p>
+      </div>
+      <div class="hero-readout">
+        <span>已管理账号</span><strong id="account-count">—</strong><small>ACCOUNTS READY</small>
+      </div>
+    </section>
+
+    <section class="panel accounts-panel">
+      <div class="section-head">
+        <div><p class="eyebrow"><span>QUOTA / 02</span> 账号燃料舱</p><h2>谁的额度最充足</h2></div>
+        <button id="refresh-quota" class="secondary-button">刷新真实额度</button>
+      </div>
+      <div id="accounts" class="account-grid" aria-live="polite">
+        <div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div>
+      </div>
+      <p class="fine-print">“未知”表示 Tools 还没拿到周额度，不会再把模型的 100% 错当成周额度。</p>
+    </section>
+
+    <section class="relay-layout">
+      <section class="panel relay-panel">
+        <div class="section-head compact">
+          <div><p class="eyebrow"><span>RELAY / 03</span> 一键安全接力</p><h2>选择旧对话和新账号</h2></div>
+          <span class="safety-badge">3 重验证</span>
+        </div>
+
+        <form id="relay-form">
+          <label class="field-label" for="conversation-search">① 要继续哪段对话</label>
+          <div class="search-wrap">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+            <input id="conversation-search" type="search" placeholder="搜索标题、预览或对话编号…" autocomplete="off">
+          </div>
+          <div id="conversation-list" class="conversation-list" role="listbox" aria-label="选择源对话"></div>
+
+          <label class="field-label target-label" for="target-account">② 接到哪个账号</label>
+          <div class="select-wrap">
+            <select id="target-account" required><option value="">先选择一个有额度的账号</option></select>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5 5 5-5"/></svg>
+          </div>
+
+          <div id="preflight" class="preflight">
+            <div><i></i><span>旧对话永远保留</span></div>
+            <div><i></i><span>新对话先自动备份</span></div>
+            <div><i></i><span>验证失败可回滚</span></div>
+          </div>
+
+          <button id="relay-button" class="primary-button" type="submit" disabled>
+            <span>开始安全接力</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg>
+          </button>
+          <p class="button-help">开始前请退出所有 agy 窗口。通常需要 1–3 分钟。</p>
+        </form>
+      </section>
+
+      <aside class="panel activity-panel">
+        <div class="section-head compact"><div><p class="eyebrow"><span>LOG / 04</span> 接力记录</p><h2>最近发生的事</h2></div></div>
+        <div id="active-job" class="active-job hidden"></div>
+        <div id="history" class="history-list"></div>
+      </aside>
+    </section>
+
+    <section class="method-strip">
+      <div><span>01</span><strong>切换身份</strong><small>Antigravity Tools</small></div>
+      <i></i><div><span>02</span><strong>创建空壳</strong><small>新账号绑定</small></div>
+      <i></i><div><span>03</span><strong>移植记忆</strong><small>轨迹 + Brain</small></div>
+      <i></i><div><span>04</span><strong>核验启动</strong><small>完整性 + 回滚</small></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <dialog id="confirm-dialog">
+    <form method="dialog">
+      <span class="dialog-icon">↗</span>
+      <p class="eyebrow">FINAL CHECK</p>
+      <h2>准备接力</h2>
+      <p id="confirm-copy"></p>
+      <div class="dialog-warning">接力期间不要打开新的 agy 窗口。源对话不会被修改。</div>
+      <div class="dialog-actions"><button value="cancel" class="secondary-button">先等等</button><button id="confirm-go" value="confirm" class="primary-button">确认，开始接力</button></div>
+    </form>
+  </dialog>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

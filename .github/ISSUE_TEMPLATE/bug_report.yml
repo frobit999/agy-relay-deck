@@ -1,0 +1,28 @@
+name: Bug report
+description: Report a reproducible problem without sharing private account or conversation data.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not attach tokens, account JSON files, conversation databases, prompts, or unredacted screenshots."
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: macOS, Node.js, Python, agy, and Antigravity Tools versions.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Explain the smallest sequence that reproduces the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
