@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#070a10">
+  <meta name="description" content="本地优先的 Antigravity CLI 多账号接力与多窗口记忆汇合面板">
   <meta name="panel-token" content="__PANEL_TOKEN_VALUE__">
   <title>Agy Relay Deck · 本地接力台</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -31,7 +32,7 @@
       <div>
         <p class="eyebrow"><span>CONTROL / 01</span> 上下文接力控制台</p>
         <h1>额度会清零，<br><em>思路不断线。</em></h1>
-        <p class="intro">把一段超长对话安全嫁接给下一个账号。账号负责额度，本地数据库负责记忆。</p>
+        <p class="intro">一段母记忆可以分成多个并行窗口，再换号汇合成新的唯一主线。</p>
       </div>
       <div class="hero-readout">
         <span>已管理账号</span><strong id="account-count">—</strong><small>ACCOUNTS READY</small>
@@ -49,10 +50,34 @@
       <p class="fine-print">“未知”表示 Tools 还没拿到周额度，不会再把模型的 100% 错当成周额度。</p>
     </section>
 
+    <section class="panel rooms-panel">
+      <div class="section-head">
+        <div><p class="eyebrow"><span>ROOMS / 03</span> 多窗口记忆房间</p><h2>一份记忆，开几个窗口都行</h2></div>
+        <span class="safety-badge">2–6 个窗口</span>
+      </div>
+      <div class="room-create-grid">
+        <label class="room-field">
+          <span>① 共同继承哪段母记忆</span>
+          <div class="select-wrap"><select id="room-source"><option value="">选择最近对话</option></select><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5 5 5-5"/></svg></div>
+        </label>
+        <label class="room-field count-field">
+          <span>② 开几个窗口</span>
+          <input id="room-count" type="number" min="2" max="6" value="3" inputmode="numeric">
+        </label>
+        <label class="room-field">
+          <span>③ 这些窗口使用哪个账号</span>
+          <div class="select-wrap"><select id="room-account"><option value="">选择账号</option></select><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5 5 5-5"/></svg></div>
+        </label>
+        <button id="room-create" class="primary-button" type="button" disabled>创建并行房间</button>
+      </div>
+      <p class="room-warning">创建和汇合前需要退出所有 agy 窗口。并行期间每个窗口拥有独立对话数据库；如果它们同时改同一批代码，仍需用 Git 处理文件冲突。</p>
+      <div id="rooms" class="rooms-list" aria-live="polite"></div>
+    </section>
+
     <section class="relay-layout">
       <section class="panel relay-panel">
         <div class="section-head compact">
-          <div><p class="eyebrow"><span>RELAY / 03</span> 一键安全接力</p><h2>选择旧对话和新账号</h2></div>
+          <div><p class="eyebrow"><span>RELAY / 04</span> 单窗口接力</p><h2>只接一条对话时用这里</h2></div>
           <span class="safety-badge">3 重验证</span>
         </div>
 
@@ -78,14 +103,13 @@
 
           <button id="relay-button" class="primary-button" type="submit" disabled>
             <span>开始安全接力</span>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg>
           </button>
           <p class="button-help">开始前请退出所有 agy 窗口。通常需要 1–3 分钟。</p>
         </form>
       </section>
 
       <aside class="panel activity-panel">
-        <div class="section-head compact"><div><p class="eyebrow"><span>LOG / 04</span> 接力记录</p><h2>最近发生的事</h2></div></div>
+        <div class="section-head compact"><div><p class="eyebrow"><span>LOG / 05</span> 接力记录</p><h2>最近发生的事</h2></div></div>
         <div id="active-job" class="active-job hidden"></div>
         <div id="history" class="history-list"></div>
       </aside>

@@ -33,3 +33,18 @@ test("failed verified handoffs have an automatic rollback path", () => {
   assert.match(server, /failed_rolled_back/);
   assert.match(server, /binding_tables_unchanged/);
 });
+
+test("parallel rooms use transcript deltas and never splice trajectory tables", () => {
+  const server = fs.readFileSync(path.join(root, "server.mjs"), "utf8");
+  assert.match(server, /baselineMaxStepIndex/);
+  assert.match(server, /transcript\.jsonl/);
+  assert.match(server, /buildMergeShards/);
+  assert.match(server, /MERGE_SHARD_CHARS/);
+  assert.doesNotMatch(server, /UNION\s+ALL\s+SELECT.+steps/is);
+});
+
+test("brain copies prefer APFS copy-on-write clones", () => {
+  const script = fs.readFileSync(path.join(root, "tools/agy_cli_transplant.py"), "utf8");
+  assert.match(script, /"\/bin\/cp", "-cR"/);
+  assert.match(script, /shutil\.copytree/);
+});

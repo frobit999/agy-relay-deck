@@ -9,6 +9,8 @@
 - Every destination database is backed up before replacement.
 - Database integrity, portable-table row counts, and preserved binding-table digests are checked after a transplant.
 - A failed post-transplant verification triggers automatic rollback.
+- Parallel branches are separate conversation databases; the dashboard never opens one conversation ID in multiple writers.
+- Merge transcripts are treated as untrusted historical data, processed in plan+sandbox mode, and never executed as instructions.
 
 ## Important limitations
 

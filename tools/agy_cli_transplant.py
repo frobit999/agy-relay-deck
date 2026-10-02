@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -288,11 +289,25 @@ def safe_copy_brain(source: Path, target: Path, backup: Path, stamp: str) -> Non
     stage = target.parent / f".{target.name}.transplant-stage-{stamp}"
     if stage.exists():
         fail(f"staging path already exists: {stage}")
-    shutil.copytree(source, stage, symlinks=True)
+    copy_tree(source, stage)
     if target.exists():
-        shutil.copytree(target, backup, symlinks=True)
+        copy_tree(target, backup)
         shutil.rmtree(target)
     os.replace(stage, target)
+
+
+def copy_tree(source: Path, destination: Path) -> None:
+    """Copy a directory, using APFS copy-on-write clones when available."""
+    if sys.platform == "darwin" and Path("/bin/cp").is_file():
+        result = subprocess.run(
+            ["/bin/cp", "-cR", str(source), str(destination)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if result.returncode == 0:
+            return
+    shutil.copytree(source, destination, symlinks=True)
 
 
 def apply_transplant(
