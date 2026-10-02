@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1
+
+- Show each conversation's local storage size beside its step count.
+- Count the SQLite database (including WAL/SHM), brain directory, transcripts, artifacts, and annotation.
+- Cache recursive brain measurements for one minute to keep dashboard refreshes responsive.
+
 ## 1.1.0
 
 - Add parallel memory rooms with 2–6 independently writable conversation windows.

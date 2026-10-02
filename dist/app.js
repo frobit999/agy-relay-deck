@@ -20,6 +20,14 @@ function relativeTime(value) {
 
 function percent(value) { return typeof value === "number" ? Math.max(0, Math.min(100, Math.round(value * 100))) : null; }
 function quotaClass(value) { return value === null ? "unknown" : value >= 55 ? "good" : value >= 20 ? "mid" : "low"; }
+function formatBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "体积未知";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const number = bytes / (1024 ** index);
+  return `${number >= 100 || index === 0 ? number.toFixed(0) : number.toFixed(1)} ${units[index]}`;
+}
 function maskedEmail(email = "") {
   const [name, domain] = email.split("@");
   return domain ? `${name.slice(0, 2)}•••@${domain}` : email;
@@ -81,7 +89,7 @@ function renderConversationPicker() {
   $("#conversation-list").innerHTML = conversations.length ? conversations.map((item) => `
     <button type="button" class="conversation-item ${state.selectedConversation?.id === item.id ? "selected" : ""}" role="option" aria-selected="${state.selectedConversation?.id === item.id}" data-id="${escapeHtml(item.id)}">
       <span class="conversation-radio"></span><span class="conversation-copy"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.preview || item.workspace || item.id)}</small></span>
-      <span class="conversation-meta">${item.stepCount === null ? "—" : Number(item.stepCount).toLocaleString()} steps<br>${escapeHtml(relativeTime(item.modifiedAt))}</span>
+      <span class="conversation-meta">${item.stepCount === null ? "—" : Number(item.stepCount).toLocaleString()} steps · ${escapeHtml(formatBytes(item.totalLocalBytes))}<br>${escapeHtml(relativeTime(item.modifiedAt))}</span>
     </button>`).join("") : '<div class="history-empty"><strong>没有匹配的对话</strong>换个关键词试试。</div>';
   document.querySelectorAll(".conversation-item").forEach((button) => button.addEventListener("click", () => {
     state.selectedConversation = state.data.conversations.find((item) => item.id === button.dataset.id);
@@ -90,7 +98,7 @@ function renderConversationPicker() {
 }
 
 function renderRoomSetup(conversations) {
-  const html = '<option value="">选择最近对话</option>' + conversations.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)} · ${item.stepCount === null ? "—" : Number(item.stepCount).toLocaleString()} steps · ${escapeHtml(relativeTime(item.modifiedAt))}</option>`).join("");
+  const html = '<option value="">选择最近对话</option>' + conversations.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)} · ${item.stepCount === null ? "—" : Number(item.stepCount).toLocaleString()} steps · ${escapeHtml(formatBytes(item.totalLocalBytes))} · ${escapeHtml(relativeTime(item.modifiedAt))}</option>`).join("");
   fillSelect($("#room-source"), html);
 }
 
@@ -110,7 +118,7 @@ function renderRooms(rooms) {
     const mergeAccounts = accountOptions(accounts, "汇合后使用哪个账号");
     return `<article class="room-card ${active ? "active" : ""}" data-room="${escapeHtml(room.id)}" data-workspace="${escapeHtml(room.workspace || "")}">
       <div class="room-card-head"><div class="room-card-title"><strong>${escapeHtml(room.sourceTitle)}</strong><small>ROOM ${escapeHtml(room.id.slice(0, 8))} · ${room.branches.length} 个窗口 · ${escapeHtml(relativeTime(room.updatedAt))}</small></div><span class="room-state ${escapeHtml(room.state)}">${escapeHtml(roomStateLabel(room.state))}</span></div>
-      ${room.branches.length ? `<div class="branch-grid">${room.branches.map((branch) => `<div class="branch-card"><strong>窗口 ${escapeHtml(branch.label)}<span>${branch.addedSteps === null ? "增量未知" : `+${Number(branch.addedSteps).toLocaleString()}`}</span></strong><small>${escapeHtml(branch.conversationId.slice(0, 8))}… · 当前 ${branch.currentStepCount === null ? "—" : Number(branch.currentStepCount).toLocaleString()} steps</small></div>`).join("")}</div>` : ""}
+      ${room.branches.length ? `<div class="branch-grid">${room.branches.map((branch) => `<div class="branch-card"><strong>窗口 ${escapeHtml(branch.label)}<span>${branch.addedSteps === null ? "增量未知" : `+${Number(branch.addedSteps).toLocaleString()}`}</span></strong><small>${escapeHtml(branch.conversationId.slice(0, 8))}… · 当前 ${branch.currentStepCount === null ? "—" : Number(branch.currentStepCount).toLocaleString()} steps · ${escapeHtml(formatBytes(branch.currentBytes))}</small></div>`).join("")}</div>` : ""}
       ${steps.length && (active || /failed/.test(room.state)) ? `<div class="room-progress">${steps.map((step) => `<div class="job-step ${escapeHtml(step.state)}"><i></i><span><strong>${escapeHtml(step.label)}</strong>${step.detail ? `<small>${escapeHtml(step.detail)}</small>` : ""}</span></div>`).join("")}${room.error ? `<div class="room-error">${escapeHtml(room.error)}</div>` : ""}</div>` : ""}
       ${roomCanMerge(room) ? `<div class="room-controls"><button class="secondary-button launch-room" data-action="launch-room" ${running ? "disabled" : ""}>${running ? "已有 agy 窗口运行" : "打开全部窗口"}</button><select data-role="primary">${primaryOptions}</select><select data-role="merge-account">${mergeAccounts}</select><button class="primary-button" data-action="merge-room" ${running ? "disabled" : ""}>汇合并换号</button></div>` : ""}
       ${room.state === "merged" && room.canonicalConversationId ? `<div class="room-canonical"><div><strong>新的唯一母会话已生成</strong><small>${escapeHtml(room.canonicalConversationId.slice(0, 8))}… · ${room.mergeShardCount || 0} 个记忆分片已吸收</small></div><div class="history-actions"><button class="mini-button" data-action="launch-canonical" data-id="${escapeHtml(room.canonicalConversationId)}">打开母会话</button><button class="mini-button" data-action="reseed" data-id="${escapeHtml(room.canonicalConversationId)}">再开一轮窗口</button></div></div>` : ""}

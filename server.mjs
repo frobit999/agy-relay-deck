@@ -22,8 +22,10 @@ const DIST = path.join(__dirname, "dist");
 const DEMO = process.env.PANEL_DEMO === "1";
 const jobs = new Map();
 const roomJobs = new Map();
+const conversationSizeCache = new Map();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MERGE_SHARD_CHARS = 220_000;
+const SIZE_CACHE_TTL_MS = 60_000;
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -181,6 +183,44 @@ function safeParseWorkspace(raw) {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+function fileBytes(file) {
+  try { return fs.statSync(file).size; } catch { return 0; }
+}
+
+function attachConversationSizes(conversations) {
+  if (DEMO) return conversations;
+  const now = Date.now();
+  const stale = conversations.filter((item) => {
+    const cached = conversationSizeCache.get(item.id);
+    return !cached || now - cached.checkedAt > SIZE_CACHE_TTL_MS;
+  });
+  if (stale.length) {
+    const du = findExecutable(["/usr/bin/du", "/bin/du"]);
+    const brainPaths = stale.map((item) => path.join(AGY_ROOT, "brain", item.id));
+    const measured = new Map();
+    if (du) {
+      const result = spawnSync(du, ["-sk", ...brainPaths], { encoding: "utf8", timeout: 20_000 });
+      for (const line of result.stdout.split(/\r?\n/)) {
+        const match = line.match(/^\s*(\d+)\s+(.+)$/);
+        if (match) measured.set(path.basename(match[2]), Number(match[1]) * 1024);
+      }
+    }
+    for (const item of stale) {
+      conversationSizeCache.set(item.id, { checkedAt: now, brainBytes: measured.get(item.id) || 0 });
+    }
+  }
+  return conversations.map((item) => {
+    const dbBase = path.join(AGY_ROOT, "conversations", `${item.id}.db`);
+    const brain = path.join(AGY_ROOT, "brain", item.id);
+    const databaseBytes = fileBytes(dbBase) + fileBytes(`${dbBase}-wal`) + fileBytes(`${dbBase}-shm`);
+    const brainBytes = conversationSizeCache.get(item.id)?.brainBytes || 0;
+    const annotationBytes = fileBytes(path.join(AGY_ROOT, "annotations", `${item.id}.pbtxt`));
+    const transcriptBytes = fileBytes(path.join(brain, ".system_generated", "logs", "transcript.jsonl"))
+      + fileBytes(path.join(brain, ".system_generated", "logs", "transcript_full.jsonl"));
+    return { ...item, databaseBytes, brainBytes, transcriptBytes, totalLocalBytes: databaseBytes + brainBytes + annotationBytes };
+  });
+}
+
 function queryConversations(limit = 30) {
   if (DEMO) return demoConversations();
   const db = path.join(AGY_ROOT, "conversation_summaries.db");
@@ -206,7 +246,7 @@ function queryConversations(limit = 30) {
   }
   if (result.status !== 0 || !result.stdout.trim()) return scanConversations(limit);
   try {
-    return JSON.parse(result.stdout).map((row) => ({
+    return attachConversationSizes(JSON.parse(result.stdout).map((row) => ({
       id: row.conversation_id,
       title: row.title || "未命名对话",
       preview: row.preview || "",
@@ -215,14 +255,14 @@ function queryConversations(limit = 30) {
       workspace: safeParseWorkspace(row.workspace_uris),
       status: row.status || "",
       projectId: row.project_id || "",
-    }));
+    })));
   } catch { return scanConversations(limit); }
 }
 
 function scanConversations(limit = 30) {
   const dir = path.join(AGY_ROOT, "conversations");
   try {
-    return fs.readdirSync(dir).filter((file) => /^[0-9a-f-]{36}\.db$/i.test(file)).map((file) => {
+    return attachConversationSizes(fs.readdirSync(dir).filter((file) => /^[0-9a-f-]{36}\.db$/i.test(file)).map((file) => {
       const full = path.join(dir, file);
       const stat = fs.statSync(full);
       const id = file.slice(0, -3);
@@ -233,15 +273,15 @@ function scanConversations(limit = 30) {
         if (match) title = match[1].replaceAll('\\"', '"').replaceAll("\\\\", "\\");
       } catch { /* annotation is optional */ }
       return { id, title, preview: "摘要库暂时不可读", stepCount: null, modifiedAt: stat.mtime.toISOString(), workspace: null, status: "", projectId: "" };
-    }).sort((a,b) => new Date(b.modifiedAt)-new Date(a.modifiedAt)).slice(0, limit);
+    }).sort((a,b) => new Date(b.modifiedAt)-new Date(a.modifiedAt)).slice(0, limit));
   } catch { return []; }
 }
 
 function demoConversations() {
   return [
-    { id: "11111111-1111-4111-8111-111111111111", title: "重构支付系统 · 长对话", preview: "继续完成迁移后的接口验证与回归测试…", stepCount: 22872, modifiedAt: new Date().toISOString(), workspace: path.join(HOME, "Projects", "payments"), status: "", projectId: "default-cli-project" },
-    { id: "22222222-2222-4222-8222-222222222222", title: "数据看板样式调整", preview: "统一图表色彩和移动端布局", stepCount: 1842, modifiedAt: new Date(Date.now()-65*60e3).toISOString(), workspace: path.join(HOME, "Projects", "dashboard"), status: "", projectId: "default-cli-project" },
-    { id: "33333333-3333-4333-8333-333333333333", title: "API 日志排障", preview: "定位间歇性 502 的上游原因", stepCount: 906, modifiedAt: new Date(Date.now()-864e5).toISOString(), workspace: path.join(HOME, "Projects", "api"), status: "", projectId: "default-cli-project" },
+    { id: "11111111-1111-4111-8111-111111111111", title: "重构支付系统 · 长对话", preview: "继续完成迁移后的接口验证与回归测试…", stepCount: 22872, totalLocalBytes: 1468006400, databaseBytes: 285212672, brainBytes: 1182793728, transcriptBytes: 155189248, modifiedAt: new Date().toISOString(), workspace: path.join(HOME, "Projects", "payments"), status: "", projectId: "default-cli-project" },
+    { id: "22222222-2222-4222-8222-222222222222", title: "数据看板样式调整", preview: "统一图表色彩和移动端布局", stepCount: 1842, totalLocalBytes: 188743680, databaseBytes: 50331648, brainBytes: 138412032, transcriptBytes: 69206016, modifiedAt: new Date(Date.now()-65*60e3).toISOString(), workspace: path.join(HOME, "Projects", "dashboard"), status: "", projectId: "default-cli-project" },
+    { id: "33333333-3333-4333-8333-333333333333", title: "API 日志排障", preview: "定位间歇性 502 的上游原因", stepCount: 906, totalLocalBytes: 73400320, databaseBytes: 29360128, brainBytes: 44040192, transcriptBytes: 25165824, modifiedAt: new Date(Date.now()-864e5).toISOString(), workspace: path.join(HOME, "Projects", "api"), status: "", projectId: "default-cli-project" },
   ];
 }
 
@@ -334,6 +374,7 @@ function publicRoom(room, conversations = []) {
         createdAt: branch.createdAt,
         baselineStepCount: branch.baselineStepCount,
         currentStepCount: currentSteps,
+        currentBytes: live?.totalLocalBytes ?? null,
         addedSteps: typeof currentSteps === "number" && typeof branch.baselineStepCount === "number"
           ? Math.max(0, currentSteps - branch.baselineStepCount)
           : null,

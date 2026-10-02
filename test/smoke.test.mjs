@@ -48,3 +48,12 @@ test("brain copies prefer APFS copy-on-write clones", () => {
   assert.match(script, /"\/bin\/cp", "-cR"/);
   assert.match(script, /shutil\.copytree/);
 });
+
+test("conversation summaries expose cached local storage volume", () => {
+  const server = fs.readFileSync(path.join(root, "server.mjs"), "utf8");
+  const app = fs.readFileSync(path.join(root, "dist/app.js"), "utf8");
+  assert.match(server, /totalLocalBytes/);
+  assert.match(server, /SIZE_CACHE_TTL_MS/);
+  assert.match(server, /databaseBytes \+ brainBytes \+ annotationBytes/);
+  assert.match(app, /formatBytes\(item\.totalLocalBytes\)/);
+});
