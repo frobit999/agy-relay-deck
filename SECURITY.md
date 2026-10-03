@@ -11,6 +11,8 @@
 - A failed post-transplant verification triggers automatic rollback.
 - Parallel branches are separate conversation databases; the dashboard never opens one conversation ID in multiple writers.
 - Merge transcripts are treated as untrusted historical data, processed in plan+sandbox mode, and never executed as instructions.
+- Cleanup is gated behind canonical-conversation verification and moves exact UUID-scoped files to the macOS Trash instead of permanently deleting them.
+- Recovery manifests stay local under `~/.agy-relay-deck/cleanup/` and are never exposed to the browser.
 
 ## Important limitations
 

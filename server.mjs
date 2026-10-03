@@ -268,7 +268,7 @@ function queryConversations(limit = 30) {
       workspace: safeParseWorkspace(row.workspace_uris),
       status: row.status || "",
       projectId: row.project_id || "",
-    })));
+    })).filter((item) => fs.existsSync(path.join(AGY_ROOT, "conversations", `${item.id}.db`))));
   } catch { return scanConversations(limit); }
 }
 
@@ -361,8 +361,48 @@ function roomById(id) {
   return roomJobs.get(id) || loadRooms().find((room) => room.id === id) || null;
 }
 
+function roomGeneration(room, rooms = loadRooms()) {
+  if (Number.isInteger(room.generation) && room.generation > 0) return room.generation;
+  const parent = rooms.find((item) => item.canonicalConversationId === room.sourceConversationId);
+  return parent ? roomGeneration(parent, rooms) + 1 : 1;
+}
+
+function sourceEligibility(conversationId, rooms = loadRooms()) {
+  for (const room of rooms) {
+    if ((room.branches || []).some((branch) => branch.conversationId === conversationId)) {
+      return { eligible: false, role: `第 ${roomGeneration(room, rooms)} 代分支`, roomId: room.id };
+    }
+    if (room.sourceConversationId === conversationId && !["failed", "merge_failed"].includes(room.state)) {
+      return { eligible: false, role: `第 ${roomGeneration(room, rooms)} 代旧母会话`, roomId: room.id };
+    }
+    if (room.canonicalConversationId === conversationId) {
+      const eligible = ["verified", "cleaned"].includes(room.state);
+      return { eligible, role: `第 ${roomGeneration(room, rooms)} 代母会话`, roomId: room.id };
+    }
+  }
+  return { eligible: true, role: "普通对话", roomId: null };
+}
+
 function publicRoom(room, conversations = []) {
   const byId = new Map(conversations.map((item) => [item.id, item]));
+  const rooms = loadRooms();
+  const branchViews = (room.branches || []).map((branch) => {
+    const live = byId.get(branch.conversationId);
+    const currentSteps = live?.stepCount ?? null;
+    return {
+      label: branch.label,
+      conversationId: branch.conversationId,
+      createdAt: branch.createdAt,
+      baselineStepCount: branch.baselineStepCount,
+      currentStepCount: currentSteps,
+      currentBytes: live?.totalLocalBytes ?? null,
+      addedSteps: typeof currentSteps === "number" && typeof branch.baselineStepCount === "number"
+        ? Math.max(0, currentSteps - branch.baselineStepCount)
+        : null,
+    };
+  });
+  const recommended = [...branchViews].sort((a, b) => (b.addedSteps ?? -1) - (a.addedSteps ?? -1))[0]?.conversationId || null;
+  const cleanupManifest = room.cleanupManifest ? jsonFile(room.cleanupManifest, null) : null;
   return {
     id: room.id,
     state: room.state,
@@ -378,22 +418,88 @@ function publicRoom(room, conversations = []) {
     error: room.error || null,
     steps: room.steps || [],
     mergeShardCount: room.mergeShardCount || 0,
-    branches: (room.branches || []).map((branch) => {
-      const live = byId.get(branch.conversationId);
-      const currentSteps = live?.stepCount ?? null;
-      return {
-        label: branch.label,
-        conversationId: branch.conversationId,
-        createdAt: branch.createdAt,
-        baselineStepCount: branch.baselineStepCount,
-        currentStepCount: currentSteps,
-        currentBytes: live?.totalLocalBytes ?? null,
-        addedSteps: typeof currentSteps === "number" && typeof branch.baselineStepCount === "number"
-          ? Math.max(0, currentSteps - branch.baselineStepCount)
-          : null,
-      };
-    }),
+    generation: roomGeneration(room, rooms),
+    recommendedPrimaryBranchId: recommended,
+    cleanupLogicalBytes: room.cleanupLogicalBytes || 0,
+    cleanupAt: room.cleanupAt || null,
+    canRestore: Boolean(cleanupManifest?.moves?.some((move) => fs.existsSync(move.trash))),
+    branches: branchViews,
   };
+}
+
+function moveRoomBranchesToTrash(room) {
+  if (!UUID_RE.test(room.id)) throw new Error("房间编号不合法。");
+  if (agyProcesses().length) throw new Error("请先退出所有 agy 窗口再清理上一代分支。");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const trashRoot = path.join(HOME, ".Trash", "Agy Relay Deck", `${stamp}-${room.id}`);
+  fs.mkdirSync(trashRoot, { recursive: true, mode: 0o700 });
+  const conversations = queryConversations(200);
+  const byId = new Map(conversations.map((item) => [item.id, item]));
+  const moves = [];
+  let logicalBytes = 0;
+  try {
+    for (const branch of room.branches || []) {
+      const id = branch.conversationId;
+      if (!UUID_RE.test(id)) throw new Error("分支对话编号不合法。");
+      logicalBytes += byId.get(id)?.totalLocalBytes || 0;
+      const groups = [
+        [path.join(AGY_ROOT, "conversations"), (name) => name === `${id}.db` || name.startsWith(`${id}.db.`) || name === `${id}.db-wal` || name === `${id}.db-shm`],
+        [path.join(AGY_ROOT, "brain"), (name) => name === id || name.startsWith(`${id}.before-transplant-`)],
+        [path.join(AGY_ROOT, "annotations"), (name) => name === `${id}.pbtxt` || name.startsWith(`${id}.pbtxt.before-transplant-`)],
+      ];
+      for (const [directory, matches] of groups) {
+        for (const name of fs.existsSync(directory) ? fs.readdirSync(directory) : []) {
+          if (!matches(name)) continue;
+          const source = path.join(directory, name);
+          const category = path.basename(directory);
+          const destinationDir = path.join(trashRoot, category);
+          fs.mkdirSync(destinationDir, { recursive: true, mode: 0o700 });
+          const trash = path.join(destinationDir, name);
+          if (fs.existsSync(trash)) throw new Error(`废纸篓目标已存在：${name}`);
+          fs.renameSync(source, trash);
+          moves.push({ source, trash });
+        }
+      }
+    }
+  } catch (error) {
+    for (const move of [...moves].reverse()) {
+      if (fs.existsSync(move.trash) && !fs.existsSync(move.source)) {
+        fs.mkdirSync(path.dirname(move.source), { recursive: true });
+        fs.renameSync(move.trash, move.source);
+      }
+    }
+    throw error;
+  }
+  const manifestFile = path.join(STATE_ROOT, "cleanup", `${room.id}.json`);
+  const manifest = { roomId: room.id, createdAt: new Date().toISOString(), trashRoot, logicalBytes, moves };
+  writeJsonAtomic(manifestFile, manifest);
+  fs.writeFileSync(path.join(trashRoot, "restore-manifest.json"), JSON.stringify(manifest, null, 2), { mode: 0o600 });
+  updateRoom(room, { state: "cleaned", cleanupAt: manifest.createdAt, cleanupManifest: manifestFile, cleanupLogicalBytes: logicalBytes, error: null });
+  return manifest;
+}
+
+function restoreRoomBranches(room) {
+  if (agyProcesses().length) throw new Error("请先退出所有 agy 窗口再恢复分支。");
+  const manifest = jsonFile(room.cleanupManifest, null);
+  if (!manifest?.moves?.length) throw new Error("没有可恢复的清理记录，可能已经清空废纸篓。");
+  for (const move of manifest.moves) {
+    if (!fs.existsSync(move.trash)) throw new Error(`废纸篓中的文件已不存在：${path.basename(move.trash)}`);
+    if (fs.existsSync(move.source)) throw new Error(`原位置已经存在同名文件：${path.basename(move.source)}`);
+  }
+  const restored = [];
+  try {
+    for (const move of manifest.moves) {
+      fs.mkdirSync(path.dirname(move.source), { recursive: true });
+      fs.renameSync(move.trash, move.source);
+      restored.push(move);
+    }
+  } catch (error) {
+    for (const move of [...restored].reverse()) {
+      if (fs.existsSync(move.source) && !fs.existsSync(move.trash)) fs.renameSync(move.source, move.trash);
+    }
+    throw error;
+  }
+  updateRoom(room, { state: "verified", restoredAt: new Date().toISOString(), error: null });
 }
 
 function operationRunning() {
@@ -644,7 +750,7 @@ async function performRoomMerge(room, targetAccountId, primaryBranchId) {
     if (DEMO) {
       addRoomStep(room, "演示增量已分片", "done", "3 个窗口的新增记忆已收集");
       addRoomStep(room, "演示母会话已生成", "done", "所有窗口已收束");
-      updateRoom(room, { state: "merged", canonicalConversationId: crypto.randomUUID(), targetAccountId, primaryBranchId, mergeShardCount: 2, error: null });
+      updateRoom(room, { state: "merged_pending_verification", canonicalConversationId: crypto.randomUUID(), targetAccountId, primaryBranchId, mergeShardCount: 2, error: null });
       return;
     }
     if (agyProcesses().length) throw new Error("请先退出这个房间的所有 agy 窗口，再进行汇合。");
@@ -711,7 +817,7 @@ async function performRoomMerge(room, targetAccountId, primaryBranchId) {
     );
     const finalStats = conversationDbStats(targetConversationId);
     addRoomStep(room, "统一母记忆已验证", "done", `${finalStats.stepCount.toLocaleString()} 条轨迹 · 原分支全部保留`);
-    updateRoom(room, { state: "merged", error: null, mergedAt: new Date().toISOString() });
+    updateRoom(room, { state: "merged_pending_verification", error: null, mergedAt: new Date().toISOString() });
   } catch (error) {
     if (room.steps.at(-1)?.state === "running") room.steps[room.steps.length - 1].state = "failed";
     const originalError = error.message || String(error);
@@ -832,7 +938,8 @@ function launchConversation(conversationId, workspace) {
 
 async function statusPayload() {
   const online = DEMO ? true : await managerOnline();
-  const conversations = queryConversations(60);
+  const rooms = loadRooms();
+  const conversations = queryConversations(60).map((item) => ({ ...item, relay: sourceEligibility(item.id, rooms) }));
   return {
     demo: DEMO,
     manager: { online, installed: Boolean(managerBinary()), accountCount: readAccounts().length },
@@ -840,7 +947,7 @@ async function statusPayload() {
     accounts: readAccounts(),
     conversations,
     history: loadHistory(),
-    rooms: loadRooms().map((room) => publicRoom(room, conversations)),
+    rooms: rooms.map((room) => publicRoom(room, conversations)),
     settings: loadSettings(),
   };
 }
@@ -904,6 +1011,9 @@ async function api(req, res, url) {
     if (operationRunning()) return sendJson(res, 409, { error: "已有一个接力或房间操作正在进行" });
     const source = queryConversations(100).find((item) => item.id === body.sourceConversationId);
     if (!source && !DEMO) return sendJson(res, 404, { error: "找不到母对话" });
+    const eligibility = sourceEligibility(body.sourceConversationId);
+    if (!eligibility.eligible) return sendJson(res, 409, { error: `这条对话属于${eligibility.role}，不能重复分裂。请使用现有房间或验证后的新母会话。` });
+    const parent = loadRooms().find((item) => item.canonicalConversationId === body.sourceConversationId);
     const room = {
       id: crypto.randomUUID(),
       state: "creating",
@@ -914,6 +1024,7 @@ async function api(req, res, url) {
       sourceStepCount: source?.stepCount ?? null,
       workspace: body.workspace || source?.workspace || HOME,
       accountId: body.accountId,
+      generation: parent ? roomGeneration(parent) + 1 : 1,
       branchCount,
       branches: [],
       steps: [],
@@ -939,9 +1050,46 @@ async function api(req, res, url) {
     if (!room.branches?.some((branch) => branch.conversationId === body.primaryBranchId)) return sendJson(res, 400, { error: "请选择一条完整主干窗口" });
     if (!["ready", "merge_failed", "merge_failed_rolled_back"].includes(room.state)) return sendJson(res, 409, { error: "这个房间当前不能开始汇合" });
     if (operationRunning()) return sendJson(res, 409, { error: "已有一个接力或房间操作正在进行" });
+    const hasDelta = DEMO || room.branches.some((branch) => {
+      try { return conversationDbStats(branch.conversationId).stepCount > Number(branch.baselineStepCount || 0); } catch { return false; }
+    });
+    if (!hasDelta) return sendJson(res, 409, { error: "所有窗口仍是 +0，没有需要汇合的新记忆。请直接打开现有窗口工作。" });
     updateRoom(room, { state: "merging", error: null });
     performRoomMerge(room, body.targetAccountId, body.primaryBranchId);
     return sendJson(res, 202, publicRoom(room, queryConversations(100)));
+  }
+  const verifyRoomMatch = url.pathname.match(/^\/api\/rooms\/([0-9a-f-]+)\/verify$/i);
+  if (verifyRoomMatch) {
+    const room = roomById(verifyRoomMatch[1]);
+    if (!room) return sendJson(res, 404, { error: "找不到这个并行房间" });
+    if (room.state !== "merged_pending_verification" || !UUID_RE.test(room.canonicalConversationId || "")) return sendJson(res, 409, { error: "这个房间没有等待验证的新母会话" });
+    if (!DEMO && agyProcesses().length) return sendJson(res, 409, { error: "请先退出母会话窗口，再确认验证" });
+    if (!DEMO) {
+      const stats = conversationDbStats(room.canonicalConversationId);
+      if (stats.stepCount <= 0) return sendJson(res, 409, { error: "新母会话没有有效轨迹" });
+      const dossier = path.join(AGY_ROOT, "brain", room.canonicalConversationId, ".agy-relay", room.id);
+      if (!fs.existsSync(dossier)) return sendJson(res, 409, { error: "找不到汇合档案，暂不能确认" });
+    }
+    updateRoom(room, { state: "verified", verifiedAt: new Date().toISOString(), error: null });
+    return sendJson(res, 200, publicRoom(room, queryConversations(100)));
+  }
+  const cleanupRoomMatch = url.pathname.match(/^\/api\/rooms\/([0-9a-f-]+)\/cleanup$/i);
+  if (cleanupRoomMatch) {
+    const room = roomById(cleanupRoomMatch[1]);
+    if (!room) return sendJson(res, 404, { error: "找不到这个并行房间" });
+    if (room.state !== "verified") return sendJson(res, 409, { error: "必须先验证新母会话，才能清理上一代分支" });
+    if (DEMO) updateRoom(room, { state: "cleaned", cleanupAt: new Date().toISOString(), cleanupLogicalBytes: room.branches.reduce((sum, branch) => sum + (branch.currentBytes || 0), 0), error: null });
+    else moveRoomBranchesToTrash(room);
+    return sendJson(res, 200, publicRoom(room, queryConversations(100)));
+  }
+  const restoreRoomMatch = url.pathname.match(/^\/api\/rooms\/([0-9a-f-]+)\/restore$/i);
+  if (restoreRoomMatch) {
+    const room = roomById(restoreRoomMatch[1]);
+    if (!room) return sendJson(res, 404, { error: "找不到这个并行房间" });
+    if (room.state !== "cleaned") return sendJson(res, 409, { error: "这个房间当前没有已清理分支" });
+    if (DEMO) updateRoom(room, { state: "verified", restoredAt: new Date().toISOString(), error: null });
+    else restoreRoomBranches(room);
+    return sendJson(res, 200, publicRoom(room, queryConversations(100)));
   }
   if (url.pathname === "/api/handoffs") {
     if (!/^[0-9a-f-]{36}$/i.test(body.sourceConversationId || "")) return sendJson(res, 400, { error: "请选择源对话" });

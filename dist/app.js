@@ -98,12 +98,13 @@ function renderConversationPicker() {
 }
 
 function renderRoomSetup(conversations) {
-  const html = '<option value="">选择最近对话</option>' + conversations.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)} · ${item.stepCount === null ? "—" : Number(item.stepCount).toLocaleString()} steps · ${escapeHtml(formatBytes(item.totalLocalBytes))} · ${escapeHtml(relativeTime(item.modifiedAt))}</option>`).join("");
+  const eligible = conversations.filter((item) => item.relay?.eligible !== false);
+  const html = '<option value="">选择可用母会话</option>' + eligible.map((item) => `<option value="${escapeHtml(item.id)}">${item.relay?.role && item.relay.role !== "普通对话" ? `[${escapeHtml(item.relay.role)}] ` : ""}${escapeHtml(item.title)} · ${item.stepCount === null ? "—" : Number(item.stepCount).toLocaleString()} steps · ${escapeHtml(formatBytes(item.totalLocalBytes))} · ${escapeHtml(relativeTime(item.modifiedAt))}</option>`).join("");
   fillSelect($("#room-source"), html);
 }
 
 function roomStateLabel(value) {
-  return ({ creating:"正在分裂", ready:"并行中", merging:"正在汇合", merged:"已成为新母会话", failed:"创建失败", merge_failed:"汇合失败", merge_failed_rolled_back:"失败但已回滚", merge_rollback_failed:"需要人工检查" })[value] || value;
+  return ({ creating:"正在分裂", ready:"并行中", merging:"正在汇合", merged:"待验证", merged_pending_verification:"待验证", verified:"母会话已验证", cleaned:"上一代已移到废纸篓", failed:"创建失败", merge_failed:"汇合失败", merge_failed_rolled_back:"失败但已回滚", merge_rollback_failed:"需要人工检查" })[value] || value;
 }
 
 function roomCanMerge(room) { return ["ready", "merge_failed", "merge_failed_rolled_back"].includes(room.state); }
@@ -114,14 +115,17 @@ function renderRooms(rooms) {
   $("#rooms").innerHTML = rooms.length ? rooms.map((room) => {
     const active = ["creating", "merging"].includes(room.state);
     const steps = (room.steps || []).slice(-7);
-    const primaryOptions = room.branches.map((branch, index) => `<option value="${escapeHtml(branch.conversationId)}" ${room.primaryBranchId === branch.conversationId || (!room.primaryBranchId && index === 0) ? "selected" : ""}>窗口 ${escapeHtml(branch.label)} · 完整保留</option>`).join("");
+    const chosenPrimary = room.primaryBranchId || room.recommendedPrimaryBranchId;
+    const primaryOptions = room.branches.map((branch) => `<option value="${escapeHtml(branch.conversationId)}" ${chosenPrimary === branch.conversationId ? "selected" : ""}>窗口 ${escapeHtml(branch.label)} · 完整保留${branch.conversationId === room.recommendedPrimaryBranchId ? " · 推荐" : ""}</option>`).join("");
     const mergeAccounts = accountOptions(accounts, "汇合后使用哪个账号");
+    const totalAdded = room.branches.reduce((sum, branch) => sum + (branch.addedSteps || 0), 0);
+    const canonicalReady = ["merged", "merged_pending_verification", "verified", "cleaned"].includes(room.state) && room.canonicalConversationId;
     return `<article class="room-card ${active ? "active" : ""}" data-room="${escapeHtml(room.id)}" data-workspace="${escapeHtml(room.workspace || "")}">
-      <div class="room-card-head"><div class="room-card-title"><strong>${escapeHtml(room.sourceTitle)}</strong><small>ROOM ${escapeHtml(room.id.slice(0, 8))} · ${room.branches.length} 个窗口 · ${escapeHtml(relativeTime(room.updatedAt))}</small></div><span class="room-state ${escapeHtml(room.state)}">${escapeHtml(roomStateLabel(room.state))}</span></div>
+      <div class="room-card-head"><div class="room-card-title"><strong>第 ${room.generation || 1} 代 · ${escapeHtml(room.sourceTitle)}</strong><small>ROOM ${escapeHtml(room.id.slice(0, 8))} · ${room.branches.length} 个窗口 · ${escapeHtml(relativeTime(room.updatedAt))}</small></div><span class="room-state ${escapeHtml(room.state)}">${escapeHtml(roomStateLabel(room.state))}</span></div>
       ${room.branches.length ? `<div class="branch-grid">${room.branches.map((branch) => `<div class="branch-card"><strong>窗口 ${escapeHtml(branch.label)}<span>${branch.addedSteps === null ? "增量未知" : `+${Number(branch.addedSteps).toLocaleString()}`}</span></strong><small>${escapeHtml(branch.conversationId.slice(0, 8))}… · 当前 ${branch.currentStepCount === null ? "—" : Number(branch.currentStepCount).toLocaleString()} steps · ${escapeHtml(formatBytes(branch.currentBytes))}</small></div>`).join("")}</div>` : ""}
       ${steps.length && (active || /failed/.test(room.state)) ? `<div class="room-progress">${steps.map((step) => `<div class="job-step ${escapeHtml(step.state)}"><i></i><span><strong>${escapeHtml(step.label)}</strong>${step.detail ? `<small>${escapeHtml(step.detail)}</small>` : ""}</span></div>`).join("")}${room.error ? `<div class="room-error">${escapeHtml(room.error)}</div>` : ""}</div>` : ""}
-      ${roomCanMerge(room) ? `<div class="room-controls"><button class="secondary-button launch-room" data-action="launch-room" ${running ? "disabled" : ""}>${running ? "已有 agy 窗口运行" : "打开全部窗口"}</button><select data-role="primary">${primaryOptions}</select><select data-role="merge-account">${mergeAccounts}</select><button class="primary-button" data-action="merge-room" ${running ? "disabled" : ""}>汇合并换号</button></div>` : ""}
-      ${room.state === "merged" && room.canonicalConversationId ? `<div class="room-canonical"><div><strong>新的唯一母会话已生成</strong><small>${escapeHtml(room.canonicalConversationId.slice(0, 8))}… · ${room.mergeShardCount || 0} 个记忆分片已吸收</small></div><div class="history-actions"><button class="mini-button" data-action="launch-canonical" data-id="${escapeHtml(room.canonicalConversationId)}">打开母会话</button><button class="mini-button" data-action="reseed" data-id="${escapeHtml(room.canonicalConversationId)}">再开一轮窗口</button></div></div>` : ""}
+      ${roomCanMerge(room) ? `<div class="room-controls"><button class="secondary-button launch-room" data-action="launch-room" ${running ? "disabled" : ""}>${running ? "已有 agy 窗口运行" : "打开全部窗口"}</button><select data-role="primary">${primaryOptions}</select><select data-role="merge-account">${mergeAccounts}</select><button class="primary-button" data-action="merge-room" ${running || totalAdded === 0 ? "disabled" : ""}>${totalAdded === 0 ? "暂无增量，无需汇合" : "汇合并换号"}</button></div>` : ""}
+      ${canonicalReady ? `<div class="room-canonical"><div><strong>第 ${room.generation || 1} 代唯一母会话</strong><small>${escapeHtml(room.canonicalConversationId.slice(0, 8))}… · ${room.mergeShardCount || 0} 个记忆分片已吸收${room.cleanupLogicalBytes ? ` · 已收纳 ${escapeHtml(formatBytes(room.cleanupLogicalBytes))}` : ""}</small></div><div class="history-actions"><button class="mini-button" data-action="launch-canonical" data-id="${escapeHtml(room.canonicalConversationId)}">打开母会话</button>${["merged","merged_pending_verification"].includes(room.state) ? '<button class="mini-button" data-action="verify-room">我已检查，确认正常</button>' : ""}${["verified","cleaned"].includes(room.state) ? `<button class="mini-button" data-action="reseed" data-id="${escapeHtml(room.canonicalConversationId)}">从母会话开启下一代</button>` : ""}${room.state === "verified" ? '<button class="mini-button danger" data-action="cleanup-room">将 A/B/C 移到废纸篓</button>' : ""}${room.state === "cleaned" && room.canRestore ? '<button class="mini-button danger" data-action="restore-room">从废纸篓恢复 A/B/C</button>' : ""}</div></div>` : ""}
       ${room.error && !active && !/failed/.test(room.state) ? `<div class="room-error">${escapeHtml(room.error)}</div>` : ""}
     </article>`;
   }).join("") : '<div class="rooms-empty">还没有并行房间。选择一段母对话和窗口数量即可开始。</div>';
@@ -187,6 +191,24 @@ function bindRoomActions() {
     try { await request(`/api/conversations/${button.dataset.id}/launch`, { method:"POST", body:JSON.stringify({ workspace:button.closest(".room-card").dataset.workspace }) }); toast("已打开新的唯一母会话"); }
     catch (error) { toast(error.message); }
   });
+  document.querySelectorAll('[data-action="verify-room"]').forEach((button) => button.onclick = async () => {
+    const roomId = button.closest(".room-card").dataset.room;
+    if (!confirm("你已经打开新母会话，并确认重要记忆、当前任务和文件状态都正常吗？确认后才允许清理 A/B/C。")) return;
+    try { const room = await request(`/api/rooms/${roomId}/verify`, { method:"POST", body:"{}" }); replaceRoom(room); renderRooms(state.data.rooms); toast("母会话已验证，可以安全收纳上一代分支"); }
+    catch (error) { toast(error.message); }
+  });
+  document.querySelectorAll('[data-action="cleanup-room"]').forEach((button) => button.onclick = async () => {
+    const roomId = button.closest(".room-card").dataset.room;
+    if (!confirm("将窗口 A/B/C 的数据库、Brain 和附件移到 macOS 废纸篓？母会话会保留，废纸篓清空前可以恢复。")) return;
+    try { const room = await request(`/api/rooms/${roomId}/cleanup`, { method:"POST", body:"{}" }); replaceRoom(room); renderRooms(state.data.rooms); await loadStatus(false); toast("上一代分支已移到废纸篓；未清空前可恢复"); }
+    catch (error) { toast(error.message); }
+  });
+  document.querySelectorAll('[data-action="restore-room"]').forEach((button) => button.onclick = async () => {
+    const roomId = button.closest(".room-card").dataset.room;
+    if (!confirm("把 A/B/C 从废纸篓恢复到 Antigravity 对话目录吗？")) return;
+    try { const room = await request(`/api/rooms/${roomId}/restore`, { method:"POST", body:"{}" }); replaceRoom(room); renderRooms(state.data.rooms); await loadStatus(false); toast("上一代分支已恢复"); }
+    catch (error) { toast(error.message); }
+  });
   document.querySelectorAll('[data-action="reseed"]').forEach((button) => button.onclick = () => {
     $("#room-source").value = button.dataset.id;
     $("#room-source").scrollIntoView({ behavior:"smooth", block:"center" });
@@ -233,7 +255,7 @@ async function pollRoom(id) {
       if (!["creating", "merging"].includes(room.state)) {
         clearInterval(state.roomPoller); await loadStatus(false);
         if (room.state === "ready") toast("并行房间已就绪，可以打开全部窗口");
-        else if (room.state === "merged") toast("汇合完成：新的唯一母会话已生成");
+        else if (["merged","merged_pending_verification"].includes(room.state)) toast("汇合完成：请打开新母会话检查，确认后才能清理旧分支");
         else toast(room.error || roomStateLabel(room.state));
       }
     } catch (error) { clearInterval(state.roomPoller); toast(error.message); }

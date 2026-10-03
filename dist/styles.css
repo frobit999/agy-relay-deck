@@ -129,7 +129,8 @@ h2 { margin: 0; font-size: clamp(23px, 2vw, 30px); font-weight: 550; letter-spac
 .room-card-title strong { display: block; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .room-card-title small { display: block; color: var(--dim); margin-top: 4px; font: 11px ui-monospace, monospace; }
 .room-state { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 99px; padding: 5px 9px; color: var(--muted); font-size: 11px; }
-.room-state.ready, .room-state.merged { color: var(--green); border-color: rgba(101,239,176,.24); background: rgba(101,239,176,.06); }
+.room-state.ready, .room-state.verified, .room-state.cleaned { color: var(--green); border-color: rgba(101,239,176,.24); background: rgba(101,239,176,.06); }
+.room-state.merged, .room-state.merged_pending_verification { color: var(--amber); border-color: rgba(255,191,105,.24); background: rgba(255,191,105,.06); }
 .room-state.creating, .room-state.merging { color: var(--cyan); border-color: rgba(89,229,255,.24); background: rgba(89,229,255,.06); }
 .room-state.failed, .room-state.merge_failed, .room-state.merge_failed_rolled_back, .room-state.merge_rollback_failed { color: var(--red); border-color: rgba(255,107,124,.22); background: rgba(255,107,124,.06); }
 .branch-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-top: 16px; }

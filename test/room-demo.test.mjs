@@ -58,6 +58,21 @@ test("demo mode creates three branches and merges them without real account acce
   assert.equal(mergedResponse.status, 202);
   await new Promise((resolve) => setTimeout(resolve, 50));
   room = await (await fetch(`${base}/api/rooms/${room.id}`)).json();
-  assert.equal(room.state, "merged");
+  assert.equal(room.state, "merged_pending_verification");
   assert.match(room.canonicalConversationId, /^[0-9a-f-]{36}$/i);
+
+  let lifecycleResponse = await post(`/api/rooms/${room.id}/verify`, {});
+  assert.equal(lifecycleResponse.status, 200);
+  room = await lifecycleResponse.json();
+  assert.equal(room.state, "verified");
+
+  lifecycleResponse = await post(`/api/rooms/${room.id}/cleanup`, {});
+  assert.equal(lifecycleResponse.status, 200);
+  room = await lifecycleResponse.json();
+  assert.equal(room.state, "cleaned");
+
+  lifecycleResponse = await post(`/api/rooms/${room.id}/restore`, {});
+  assert.equal(lifecycleResponse.status, 200);
+  room = await lifecycleResponse.json();
+  assert.equal(room.state, "verified");
 });

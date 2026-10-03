@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.0
+
+- Add generation-aware conversation roles and prevent active branches or old mothers from being split again.
+- Hide ineligible branches from the new-room picker and label verified canonical mothers by generation.
+- Recommend the branch with the largest delta as the full merge trunk.
+- Refuse no-op merges when every branch is still at `+0`.
+- Require explicit post-merge verification before cleanup becomes available.
+- Move verified A/B/C branch databases, brains, annotations, and backups to a room-specific macOS Trash folder.
+- Save a recovery manifest and allow one-click restoration until the Trash is emptied.
+- Keep the previous mother conversation as the rollback anchor while removing the bulky parallel copies.
+
 ## 1.1.2
 
 - Add a persistent local preference for launching conversations with `--dangerously-skip-permissions`.

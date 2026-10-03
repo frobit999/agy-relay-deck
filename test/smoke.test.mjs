@@ -67,3 +67,12 @@ test("dangerous launch mode is explicit, persisted, and disabled by default", ()
   assert.match(html, /id="skip-permissions"/);
   assert.match(html, /危险：自动放行工具操作/);
 });
+
+test("generation cleanup is verification-gated and recoverable", () => {
+  const server = fs.readFileSync(path.join(root, "server.mjs"), "utf8");
+  assert.match(server, /merged_pending_verification/);
+  assert.match(server, /moveRoomBranchesToTrash/);
+  assert.match(server, /restoreRoomBranches/);
+  assert.match(server, /必须先验证新母会话/);
+  assert.match(server, /所有窗口仍是 \+0/);
+});
