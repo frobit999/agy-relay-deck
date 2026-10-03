@@ -70,6 +70,11 @@
         </label>
         <button id="room-create" class="primary-button" type="button" disabled>创建并行房间</button>
       </div>
+      <label class="permission-toggle" for="skip-permissions">
+        <input id="skip-permissions" type="checkbox">
+        <span>从面板启动 agy 时使用 <code>--dangerously-skip-permissions</code></span>
+        <em>危险：自动放行工具操作</em>
+      </label>
       <p class="room-warning">创建和汇合前需要退出所有 agy 窗口。并行期间每个窗口拥有独立对话数据库；如果它们同时改同一批代码，仍需用 Git 处理文件冲突。</p>
       <div id="rooms" class="rooms-list" aria-live="polite"></div>
     </section>

@@ -17,6 +17,7 @@ const MANAGER_ROOT = process.env.ANTIGRAVITY_TOOLS_HOME || path.join(HOME, ".ant
 const STATE_ROOT = process.env.AGY_RELAY_STATE || path.join(HOME, ".agy-relay-deck");
 const HISTORY_FILE = path.join(STATE_ROOT, "history.json");
 const ROOMS_FILE = path.join(STATE_ROOT, "rooms.json");
+const SETTINGS_FILE = path.join(STATE_ROOT, "settings.json");
 const TRANSPLANTER = path.join(__dirname, "tools", "agy_cli_transplant.py");
 const DIST = path.join(__dirname, "dist");
 const DEMO = process.env.PANEL_DEMO === "1";
@@ -43,6 +44,18 @@ function writeJsonAtomic(file, value) {
   const temp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temp, JSON.stringify(value, null, 2), { mode: 0o600 });
   fs.renameSync(temp, file);
+}
+
+function loadSettings() {
+  const saved = jsonFile(SETTINGS_FILE, {});
+  return { dangerouslySkipPermissions: saved?.dangerouslySkipPermissions === true };
+}
+
+function saveSettings(patch) {
+  const next = { ...loadSettings(), ...patch };
+  next.dangerouslySkipPermissions = next.dangerouslySkipPermissions === true;
+  writeJsonAtomic(SETTINGS_FILE, next);
+  return next;
 }
 
 function findExecutable(candidates) {
@@ -807,7 +820,12 @@ function launchConversation(conversationId, workspace) {
   fs.mkdirSync(STATE_ROOT, { recursive: true, mode: 0o700 });
   const commandFile = path.join(STATE_ROOT, `open-${conversationId}.command`);
   const shellQuote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
-  fs.writeFileSync(commandFile, `#!/bin/zsh\ncd ${shellQuote(cwd)}\nexec ${shellQuote(agy)} --conversation ${shellQuote(conversationId)}\n`, { mode: 0o700 });
+  const launchArgs = [
+    ...(loadSettings().dangerouslySkipPermissions ? ["--dangerously-skip-permissions"] : []),
+    "--conversation",
+    conversationId,
+  ];
+  fs.writeFileSync(commandFile, `#!/bin/zsh\ncd ${shellQuote(cwd)}\nexec ${shellQuote(agy)} ${launchArgs.map(shellQuote).join(" ")}\n`, { mode: 0o700 });
   const opened = spawnSync("/usr/bin/open", [commandFile], { encoding: "utf8" });
   if (opened.status !== 0) throw new Error(opened.stderr || "无法打开终端。");
 }
@@ -823,6 +841,7 @@ async function statusPayload() {
     conversations,
     history: loadHistory(),
     rooms: loadRooms().map((room) => publicRoom(room, conversations)),
+    settings: loadSettings(),
   };
 }
 
@@ -872,6 +891,10 @@ async function api(req, res, url) {
     if (!(await managerOnline())) return sendJson(res, 409, { error: "请先启动 Antigravity Tools" });
     await managerRequest("/api/accounts/refresh", { method: "POST", body: {}, timeout: 120000 });
     return sendJson(res, 200, { ok: true });
+  }
+  if (url.pathname === "/api/settings") {
+    if (typeof body.dangerouslySkipPermissions !== "boolean") return sendJson(res, 400, { error: "设置值不正确" });
+    return sendJson(res, 200, { ok: true, settings: saveSettings({ dangerouslySkipPermissions: body.dangerouslySkipPermissions }) });
   }
   if (url.pathname === "/api/rooms") {
     if (!UUID_RE.test(body.sourceConversationId || "")) return sendJson(res, 400, { error: "请选择母对话" });

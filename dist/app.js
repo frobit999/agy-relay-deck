@@ -1,6 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 const token = document.querySelector('meta[name="panel-token"]').content;
-const state = { data: null, selectedConversation: null, activeJob: null, poller: null, roomPoller: null };
+const state = { data: null, selectedConversation: null, activeJob: null, poller: null, roomPoller: null, settingsInitialized: false };
 
 function escapeHtml(value = "") {
   return String(value).replace(/[&<>'"]/g, (char) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" })[char]);
@@ -209,6 +209,10 @@ function updateButtons() {
 
 function render(data) {
   state.data = data;
+  if (!state.settingsInitialized) {
+    $("#skip-permissions").checked = data.settings?.dangerouslySkipPermissions === true;
+    state.settingsInitialized = true;
+  }
   setStatus($("#manager-status"), data.manager.online ? "ok" : "bad", data.manager.online ? "Tools 已连接" : data.manager.installed ? "Tools 未启动" : "Tools 未找到");
   setStatus($("#agy-status"), data.agy.runningPids.length ? "warn" : data.agy.installed ? "ok" : "bad", data.agy.runningPids.length ? `Agy 运行中 ×${data.agy.runningPids.length}` : data.agy.installed ? "Agy 已就绪" : "Agy 未找到");
   renderAccounts(data.accounts); renderRoomSetup(data.conversations); renderConversationPicker(); renderRooms(data.rooms || []); renderHistory(data.history || []); updateButtons();
@@ -282,6 +286,18 @@ $("#room-source").addEventListener("change", updateButtons);
 $("#room-account").addEventListener("change", updateButtons);
 $("#room-count").addEventListener("input", updateButtons);
 $("#room-create").addEventListener("click", createRoom);
+$("#skip-permissions").addEventListener("change", async (event) => {
+  const enabled = event.currentTarget.checked;
+  event.currentTarget.disabled = true;
+  try {
+    const result = await request("/api/settings", { method:"POST", body:JSON.stringify({ dangerouslySkipPermissions:enabled }) });
+    state.data.settings = result.settings;
+    toast(enabled ? "以后从面板启动的 agy 将跳过权限确认" : "已恢复 agy 的权限确认");
+  } catch (error) {
+    event.currentTarget.checked = !enabled;
+    toast(error.message);
+  } finally { event.currentTarget.disabled = false; }
+});
 $("#relay-form").addEventListener("submit", (event) => { event.preventDefault(); startRelay(); });
 $("#refresh").addEventListener("click", () => loadStatus(true));
 $("#refresh-quota").addEventListener("click", async () => {

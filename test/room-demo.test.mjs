@@ -30,6 +30,11 @@ test("demo mode creates three branches and merges them without real account acce
   const post = (url, body) => fetch(`${base}${url}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Panel-Token": token }, body: JSON.stringify(body) });
   const status = await (await fetch(`${base}/api/status`)).json();
   assert.equal(status.conversations[0].totalLocalBytes > 0, true);
+  assert.equal(status.settings.dangerouslySkipPermissions, false);
+  const settingResponse = await post("/api/settings", { dangerouslySkipPermissions: true });
+  assert.equal(settingResponse.status, 200);
+  const changedStatus = await (await fetch(`${base}/api/status`)).json();
+  assert.equal(changedStatus.settings.dangerouslySkipPermissions, true);
 
   const createdResponse = await post("/api/rooms", {
     sourceConversationId: "11111111-1111-4111-8111-111111111111",

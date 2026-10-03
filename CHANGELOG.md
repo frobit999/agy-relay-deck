@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.2
+
+- Add a persistent local preference for launching conversations with `--dangerously-skip-permissions`.
+- Apply the preference consistently to single handoffs, every parallel room window, and merged canonical conversations.
+- Keep the dangerous mode disabled by default for new installations and show an explicit warning beside the toggle.
+
 ## 1.1.1
 
 - Show each conversation's local storage size beside its step count.

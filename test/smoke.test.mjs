@@ -57,3 +57,13 @@ test("conversation summaries expose cached local storage volume", () => {
   assert.match(server, /databaseBytes \+ brainBytes \+ annotationBytes/);
   assert.match(app, /formatBytes\(item\.totalLocalBytes\)/);
 });
+
+test("dangerous launch mode is explicit, persisted, and disabled by default", () => {
+  const server = fs.readFileSync(path.join(root, "server.mjs"), "utf8");
+  const html = fs.readFileSync(path.join(root, "dist/index.html"), "utf8");
+  assert.match(server, /dangerouslySkipPermissions: saved\?\.dangerouslySkipPermissions === true/);
+  assert.match(server, /"--dangerously-skip-permissions"/);
+  assert.match(server, /SETTINGS_FILE/);
+  assert.match(html, /id="skip-permissions"/);
+  assert.match(html, /危险：自动放行工具操作/);
+});
