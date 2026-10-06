@@ -304,6 +304,22 @@ function agyProcesses() {
   return result.stdout.trim().split(/\s+/).filter(Boolean).map(Number);
 }
 
+function agyProcessDetails() {
+  const result = spawnSync("/bin/ps", ["-axo", "pid=,command="], { encoding: "utf8", timeout: 5000 });
+  if (result.status !== 0) return [];
+  return result.stdout.split(/\r?\n/).map((line) => {
+    const match = line.trim().match(/^(\d+)\s+(.+)$/);
+    if (!match || !/(?:^|\/)agy(?:\s|$)/.test(match[2])) return null;
+    const conversation = match[2].match(/--conversation\s+["']?([0-9a-f-]{36})["']?/i)?.[1]?.toLowerCase() || null;
+    return { pid: Number(match[1]), command: match[2], conversationId: conversation };
+  }).filter(Boolean);
+}
+
+function activeAgyForConversations(conversationIds) {
+  const ids = new Set(conversationIds.filter((id) => UUID_RE.test(id || "")).map((id) => id.toLowerCase()));
+  return agyProcessDetails().filter((process) => process.conversationId && ids.has(process.conversationId));
+}
+
 function loadHistory() {
   const value = jsonFile(HISTORY_FILE, []);
   return Array.isArray(value) ? value.slice(0, 30) : [];
@@ -429,7 +445,9 @@ function publicRoom(room, conversations = []) {
 
 function moveRoomBranchesToTrash(room) {
   if (!UUID_RE.test(room.id)) throw new Error("房间编号不合法。");
-  if (agyProcesses().length) throw new Error("请先退出所有 agy 窗口再清理上一代分支。");
+  const branchIds = (room.branches || []).map((branch) => branch.conversationId);
+  const blocking = activeAgyForConversations(branchIds);
+  if (blocking.length) throw new Error(`上一代仍有 ${blocking.length} 个分支窗口运行，请只关闭这些旧窗口后再清理。`);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const trashRoot = path.join(HOME, ".Trash", "Agy Relay Deck", `${stamp}-${room.id}`);
   fs.mkdirSync(trashRoot, { recursive: true, mode: 0o700 });
@@ -479,7 +497,9 @@ function moveRoomBranchesToTrash(room) {
 }
 
 function restoreRoomBranches(room) {
-  if (agyProcesses().length) throw new Error("请先退出所有 agy 窗口再恢复分支。");
+  const branchIds = (room.branches || []).map((branch) => branch.conversationId);
+  const blocking = activeAgyForConversations(branchIds);
+  if (blocking.length) throw new Error("同编号的旧分支仍在运行，暂不能恢复。");
   const manifest = jsonFile(room.cleanupManifest, null);
   if (!manifest?.moves?.length) throw new Error("没有可恢复的清理记录，可能已经清空废纸篓。");
   for (const move of manifest.moves) {
@@ -1063,7 +1083,7 @@ async function api(req, res, url) {
     const room = roomById(verifyRoomMatch[1]);
     if (!room) return sendJson(res, 404, { error: "找不到这个并行房间" });
     if (room.state !== "merged_pending_verification" || !UUID_RE.test(room.canonicalConversationId || "")) return sendJson(res, 409, { error: "这个房间没有等待验证的新母会话" });
-    if (!DEMO && agyProcesses().length) return sendJson(res, 409, { error: "请先退出母会话窗口，再确认验证" });
+    if (!DEMO && activeAgyForConversations([room.canonicalConversationId]).length) return sendJson(res, 409, { error: "请先退出这个新母会话窗口，再确认验证；其他代窗口可以继续运行" });
     if (!DEMO) {
       const stats = conversationDbStats(room.canonicalConversationId);
       if (stats.stepCount <= 0) return sendJson(res, 409, { error: "新母会话没有有效轨迹" });

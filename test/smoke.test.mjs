@@ -76,3 +76,11 @@ test("generation cleanup is verification-gated and recoverable", () => {
   assert.match(server, /必须先验证新母会话/);
   assert.match(server, /所有窗口仍是 \+0/);
 });
+
+test("cleanup blocks only processes attached to the conversations being moved", () => {
+  const server = fs.readFileSync(path.join(root, "server.mjs"), "utf8");
+  assert.match(server, /activeAgyForConversations/);
+  assert.match(server, /--conversation\\s\+/);
+  assert.match(server, /上一代仍有/);
+  assert.doesNotMatch(server, /function moveRoomBranchesToTrash[\s\S]{0,300}agyProcesses\(\)\.length/);
+});

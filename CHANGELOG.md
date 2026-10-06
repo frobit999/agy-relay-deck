@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.1
+
+- Scope cleanup safety checks to the exact old branch conversation IDs instead of blocking on every running `agy` process.
+- Allow a newer generation's A/B/C windows to keep running while the previous generation is moved to Trash or restored.
+- Scope canonical verification to the new mother conversation only.
+
 ## 2.0.0
 
 - Add generation-aware conversation roles and prevent active branches or old mothers from being split again.
