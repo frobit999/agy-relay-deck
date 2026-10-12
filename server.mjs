@@ -663,18 +663,18 @@ function runProcess(command, args, options = {}) {
 
 function isRetryableAgyError(error) {
   const text = String(error?.message || error || "");
-  return /"retryable"\s*:\s*true|\bEOF\b|ECONNRESET|connection reset|streamGenerateContent|\b429\b|\b50[0234]\b|deadline exceeded|temporarily unavailable/i.test(text);
+  return /"retryable"\s*:\s*true|\bEOF\b|ECONNRESET|connection reset|streamGenerateContent|timeout waiting for cascade to start running|timed? out waiting|context deadline exceeded|\b429\b|\b50[0234]\b|deadline exceeded|temporarily unavailable/i.test(text);
 }
 
 async function runAgyWithRetry(agy, args, options = {}) {
-  const maxAttempts = options.maxAttempts || 4;
+  const maxAttempts = options.maxAttempts || 6;
   let lastError;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try { return await runProcess(agy, args, options); }
     catch (error) {
       lastError = error;
       if (attempt >= maxAttempts || !isRetryableAgyError(error)) throw error;
-      const delayMs = [2000, 5000, 12000][attempt - 1] || 12000;
+      const delayMs = [5000, 10000, 15000, 30000, 30000][attempt - 1] || 30000;
       if (options.onRetry) options.onRetry({ attempt, nextAttempt: attempt + 1, maxAttempts, delayMs, error });
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }

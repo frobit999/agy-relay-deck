@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.3
+
+- Treat `timeout waiting for cascade to start running` and related context/startup deadline errors as retryable.
+- Raise merge shard attempts from four to six for very large resumed conversations.
+- Use longer startup backoff intervals (5s, 10s, 15s, 30s, 30s) before declaring a shard failed.
+
 ## 2.0.2
 
 - Retry transient merge API failures (`retryable:true`, EOF, connection resets, 429, and common 5xx responses) up to four times with exponential backoff.
