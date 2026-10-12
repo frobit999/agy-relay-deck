@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.2
+
+- Retry transient merge API failures (`retryable:true`, EOF, connection resets, 429, and common 5xx responses) up to four times with exponential backoff.
+- Keep retries scoped to the current shard instead of rolling back the entire merge after the first network interruption.
+- Increase merge shard size from roughly 220 KB to 700 KB to reduce repeated CLI startup and long-history replay overhead.
+- Remove the conflicting `--disable-slash-commands` flag from plan-mode merge turns.
+
 ## 2.0.1
 
 - Scope cleanup safety checks to the exact old branch conversation IDs instead of blocking on every running `agy` process.

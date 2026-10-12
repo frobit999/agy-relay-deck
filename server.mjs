@@ -25,7 +25,7 @@ const jobs = new Map();
 const roomJobs = new Map();
 const conversationSizeCache = new Map();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const MERGE_SHARD_CHARS = 220_000;
+const MERGE_SHARD_CHARS = 700_000;
 const SIZE_CACHE_TTL_MS = 60_000;
 
 const MIME = {
@@ -661,6 +661,27 @@ function runProcess(command, args, options = {}) {
   });
 }
 
+function isRetryableAgyError(error) {
+  const text = String(error?.message || error || "");
+  return /"retryable"\s*:\s*true|\bEOF\b|ECONNRESET|connection reset|streamGenerateContent|\b429\b|\b50[0234]\b|deadline exceeded|temporarily unavailable/i.test(text);
+}
+
+async function runAgyWithRetry(agy, args, options = {}) {
+  const maxAttempts = options.maxAttempts || 4;
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try { return await runProcess(agy, args, options); }
+    catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts || !isRetryableAgyError(error)) throw error;
+      const delayMs = [2000, 5000, 12000][attempt - 1] || 12000;
+      if (options.onRetry) options.onRetry({ attempt, nextAttempt: attempt + 1, maxAttempts, delayMs, error });
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastError;
+}
+
 function findConversationId(output) {
   const candidates = [];
   for (const line of output.split(/\r?\n/)) {
@@ -813,10 +834,17 @@ async function performRoomMerge(room, targetAccountId, primaryBranchId) {
         "与当前主干冲突时不要擅自覆盖；明确记录冲突，等待最终汇合步骤处理。",
         "本轮不要修改项目文件，不要调用写入或执行工具。回复一份不超过 1500 字的记忆检查点。",
       ].join("\n");
-      await runProcess(
+      await runAgyWithRetry(
         agy,
-        ["--conversation", targetConversationId, "--add-dir", dossier.directory, "--mode", "plan", "--sandbox", "--disable-slash-commands", "--output-format", "json", "--print", prompt],
-        { cwd: workspace, timeout: 20 * 60_000 },
+        ["--conversation", targetConversationId, "--add-dir", dossier.directory, "--mode", "plan", "--sandbox", "--output-format", "json", "--print", prompt],
+        {
+          cwd: workspace,
+          timeout: 20 * 60_000,
+          onRetry: ({ nextAttempt, maxAttempts, delayMs }) => {
+            room.steps[room.steps.length - 1].detail = `网络临时中断，${Math.round(delayMs / 1000)} 秒后自动重试 ${nextAttempt}/${maxAttempts}`;
+            updateRoom(room);
+          },
+        },
       );
       room.steps[room.steps.length - 1] = {
         label: `吸收记忆分片 ${index + 1}/${dossier.files.length}`, state: "done", detail: "已写入母会话记忆", at: new Date().toISOString(),
@@ -830,10 +858,17 @@ async function performRoomMerge(room, targetAccountId, primaryBranchId) {
       "请生成最终《统一母记忆》：合并一致事实；列出冲突及采用方案；保留所有用户偏好、关键决定、文件状态、测试结果、失败经验和未完成事项。",
       "不要执行代码或修改文件。回复应当可以作为下一轮继续工作的权威起点，并明确说明已完成多窗口记忆汇合。",
     ].join("\n");
-    await runProcess(
+    await runAgyWithRetry(
       agy,
-      ["--conversation", targetConversationId, "--add-dir", dossier.directory, "--mode", "plan", "--sandbox", "--disable-slash-commands", "--output-format", "json", "--print", finalPrompt],
-      { cwd: workspace, timeout: 20 * 60_000 },
+      ["--conversation", targetConversationId, "--add-dir", dossier.directory, "--mode", "plan", "--sandbox", "--output-format", "json", "--print", finalPrompt],
+      {
+        cwd: workspace,
+        timeout: 20 * 60_000,
+        onRetry: ({ nextAttempt, maxAttempts, delayMs }) => {
+          room.steps[room.steps.length - 1].detail = `最终汇合网络中断，${Math.round(delayMs / 1000)} 秒后重试 ${nextAttempt}/${maxAttempts}`;
+          updateRoom(room);
+        },
+      },
     );
     const finalStats = conversationDbStats(targetConversationId);
     addRoomStep(room, "统一母记忆已验证", "done", `${finalStats.stepCount.toLocaleString()} 条轨迹 · 原分支全部保留`);
