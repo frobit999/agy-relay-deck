@@ -94,3 +94,10 @@ test("merge retries transient API failures without restarting the whole room", (
   assert.match(server, /options\.maxAttempts \|\| 6/);
   assert.match(server, /const MERGE_SHARD_CHARS = 700_000/);
 });
+
+test("successful shards do not depend on a fragile final consolidation turn", () => {
+  const server = fs.readFileSync(path.join(root, "server.mjs"), "utf8");
+  assert.match(server, /分片汇合完成/);
+  assert.doesNotMatch(server, /现在完成多窗口汇合/);
+  assert.doesNotMatch(server, /最终汇合网络中断/);
+});

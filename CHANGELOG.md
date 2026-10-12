@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1.0
+
+- Remove the mandatory final model-generated consolidation turn after all merge shards succeed.
+- Treat the ordered per-shard memory checkpoints as the canonical merged memory and move directly to user verification.
+- Prevent a final cascade-start timeout from rolling back already-successful shard ingestion.
+- Record conflicts inside each shard checkpoint so the user can inspect them in the verification turn.
+
 ## 2.0.3
 
 - Treat `timeout waiting for cascade to start running` and related context/startup deadline errors as retryable.
