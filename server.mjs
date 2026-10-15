@@ -1093,10 +1093,15 @@ async function statusPayload() {
   const online = DEMO ? true : await managerOnline();
   const rooms = loadRooms();
   const conversations = queryConversations(60).map((item) => ({ ...item, relay: sourceEligibility(item.id, rooms) }));
+  const runningAgy = DEMO ? [] : agyProcessDetails();
   return {
     demo: DEMO,
     manager: { online, installed: Boolean(managerBinary()), accountCount: readAccounts().length },
-    agy: { installed: Boolean(agyBinary()), runningPids: DEMO ? [] : agyProcesses() },
+    agy: {
+      installed: Boolean(agyBinary()),
+      runningPids: runningAgy.map((process) => process.pid),
+      runningConversationIds: runningAgy.map((process) => process.conversationId).filter(Boolean),
+    },
     accounts: readAccounts(),
     conversations,
     history: loadHistory(),
@@ -1192,8 +1197,20 @@ async function api(req, res, url) {
     const room = roomById(launchRoomMatch[1]);
     if (!room) return sendJson(res, 404, { error: "找不到这个并行房间" });
     if (!room.branches?.length) return sendJson(res, 409, { error: "房间还没有可打开的窗口" });
-    for (const branch of room.branches) launchConversation(branch.conversationId, room.workspace);
-    return sendJson(res, 200, { ok: true, opened: room.branches.length });
+    const activeIds = new Set(activeAgyForConversations(room.branches.map((branch) => branch.conversationId)).map((process) => process.conversationId));
+    const pending = room.branches.filter((branch) => !activeIds.has(branch.conversationId.toLowerCase()));
+    for (const branch of pending) launchConversation(branch.conversationId, room.workspace);
+    return sendJson(res, 200, { ok: true, opened: pending.length, alreadyRunning: room.branches.length - pending.length });
+  }
+  const launchBranchMatch = url.pathname.match(/^\/api\/rooms\/([0-9a-f-]+)\/branches\/([0-9a-f-]+)\/launch$/i);
+  if (launchBranchMatch) {
+    const room = roomById(launchBranchMatch[1]);
+    if (!room) return sendJson(res, 404, { error: "找不到这个并行房间" });
+    const branch = room.branches?.find((item) => item.conversationId.toLowerCase() === launchBranchMatch[2].toLowerCase());
+    if (!branch) return sendJson(res, 404, { error: "这个窗口不属于当前房间" });
+    if (activeAgyForConversations([branch.conversationId]).length) return sendJson(res, 409, { error: `窗口 ${branch.label} 已经在运行` });
+    launchConversation(branch.conversationId, room.workspace);
+    return sendJson(res, 200, { ok: true, label: branch.label, conversationId: branch.conversationId });
   }
   const handoffRoomMatch = url.pathname.match(/^\/api\/rooms\/([0-9a-f-]+)\/handoff$/i);
   if (handoffRoomMatch) {

@@ -113,3 +113,13 @@ test("whole-room account handoff preserves branches without semantic merging", (
   assert.match(app, /整房间换号/);
   assert.match(app, /不会汇合或总结/);
 });
+
+test("parallel branches can be launched independently without duplicating active windows", () => {
+  const server = fs.readFileSync(path.join(root, "server.mjs"), "utf8");
+  const app = fs.readFileSync(path.join(root, "dist/app.js"), "utf8");
+  assert.match(server, /runningConversationIds/);
+  assert.match(server, /launchBranchMatch/);
+  assert.match(server, /alreadyRunning/);
+  assert.match(app, /data-action="launch-branch"/);
+  assert.match(app, /打开其余/);
+});

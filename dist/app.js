@@ -122,6 +122,9 @@ function chooseCurrentRoom(rooms) {
 function roomCard(room, primary = false) {
   const accounts = state.data?.accounts || [];
   const runningCount = state.data?.agy?.runningPids?.length || 0;
+  const runningIds = new Set((state.data?.agy?.runningConversationIds || []).map((id) => id.toLowerCase()));
+  const roomRunningCount = room.branches.filter((branch) => runningIds.has(branch.conversationId.toLowerCase())).length;
+  const missingCount = room.branches.length - roomRunningCount;
   const running = runningCount > 0;
   const active = ["creating", "merging", "handoff_creating"].includes(room.state);
   const steps = (room.steps || []).slice(-7);
@@ -134,9 +137,9 @@ function roomCard(room, primary = false) {
   const showProgress = steps.length && (active || /failed/.test(room.state) || room.state === "handoff_pending_verification");
   return `<article class="room-card ${primary ? "primary-room" : ""} ${active ? "active" : ""}" data-room="${escapeHtml(room.id)}" data-workspace="${escapeHtml(room.workspace || "")}">
     <div class="room-card-head"><div class="room-card-title"><strong>${escapeHtml(roomTitle(room))}</strong><small>${escapeHtml(room.id.slice(0, 8))} · ${room.branches.length} 个窗口 · ${escapeHtml(relativeTime(room.updatedAt))}</small></div><span class="room-state ${escapeHtml(room.state)}">${escapeHtml(roomStateLabel(room.state))}</span></div>
-    ${room.branches.length ? `<div class="branch-grid">${room.branches.map((branch) => `<div class="branch-card"><strong><span>窗口 ${escapeHtml(branch.label)}</span><span>${branch.addedSteps === null ? "—" : `+${Number(branch.addedSteps).toLocaleString()}`}</span></strong><small>${escapeHtml(branch.conversationId.slice(0, 8))} · ${branch.currentStepCount === null ? "—" : Number(branch.currentStepCount).toLocaleString()} steps · ${escapeHtml(formatBytes(branch.currentBytes))}</small></div>`).join("")}</div>` : ""}
+    ${room.branches.length ? `<div class="branch-grid">${room.branches.map((branch) => { const branchRunning = runningIds.has(branch.conversationId.toLowerCase()); return `<div class="branch-card"><div class="branch-top"><strong><span>窗口 ${escapeHtml(branch.label)}</span><span>${branch.addedSteps === null ? "—" : `+${Number(branch.addedSteps).toLocaleString()}`}</span></strong>${primary && ["ready","handoff_pending_verification"].includes(room.state) ? `<button class="branch-button" data-action="launch-branch" data-id="${escapeHtml(branch.conversationId)}" ${branchRunning ? "disabled" : ""}>${branchRunning ? "运行中" : "打开"}</button>` : ""}</div><small>${escapeHtml(branch.conversationId.slice(0, 8))} · ${branch.currentStepCount === null ? "—" : Number(branch.currentStepCount).toLocaleString()} steps · ${escapeHtml(formatBytes(branch.currentBytes))}</small></div>`; }).join("")}</div>` : ""}
     ${showProgress ? `<div class="room-progress">${steps.map((step) => `<div class="job-step ${escapeHtml(step.state)}"><i></i><span><strong>${escapeHtml(step.label)}</strong>${step.detail ? `<small>${escapeHtml(step.detail)}</small>` : ""}</span></div>`).join("")}${room.error ? `<div class="room-error">${escapeHtml(room.error)}</div>` : ""}</div>` : ""}
-    ${roomCanMerge(room) ? `<div class="room-controls handoff-controls"><div class="running-copy"><strong>${running ? `${runningCount} 个 agy 窗口正在运行` : "窗口当前已关闭"}</strong><small>${running ? "关闭窗口后才能重新打开或换号" : "可以重新打开，也可以整房间换号"}</small></div><button class="button secondary-button launch-room" data-action="launch-room" ${running ? "disabled" : ""}>${running ? "正在运行" : "打开全部窗口"}</button><div class="handoff-form"><select data-role="handoff-account">${handoffAccounts}</select><button class="button primary-button" data-action="handoff-room" ${running ? "disabled" : ""}>整房间换号</button></div></div><details class="advanced-room-actions"><summary>高级操作：汇合三个分支</summary><div class="room-controls merge-controls"><select data-role="primary">${primaryOptions}</select><select data-role="merge-account">${mergeAccounts}</select><button class="button secondary-button" data-action="merge-room" ${running || totalAdded === 0 ? "disabled" : ""}>${totalAdded === 0 ? "暂无增量" : "汇合成母会话"}</button></div></details>` : ""}
+    ${roomCanMerge(room) ? `<div class="room-controls handoff-controls"><div class="running-copy"><strong>${roomRunningCount ? `${roomRunningCount}/${room.branches.length} 个窗口正在运行` : "窗口当前已关闭"}</strong><small>${running ? "关闭所有 agy 窗口后才能换号" : "可以单独打开，也可以整房间换号"}</small></div><button class="button secondary-button launch-room" data-action="launch-room" ${missingCount === 0 ? "disabled" : ""}>${missingCount === 0 ? "全部运行中" : roomRunningCount ? `打开其余 ${missingCount} 个` : "打开全部窗口"}</button><div class="handoff-form"><select data-role="handoff-account">${handoffAccounts}</select><button class="button primary-button" data-action="handoff-room" ${running ? "disabled" : ""}>整房间换号</button></div></div><details class="advanced-room-actions"><summary>高级操作：汇合三个分支</summary><div class="room-controls merge-controls"><select data-role="primary">${primaryOptions}</select><select data-role="merge-account">${mergeAccounts}</select><button class="button secondary-button" data-action="merge-room" ${running || totalAdded === 0 ? "disabled" : ""}>${totalAdded === 0 ? "暂无增量" : "汇合成母会话"}</button></div></details>` : ""}
     ${room.state === "handoff_pending_verification" ? `<div class="room-canonical handoff-verification"><div><strong>新账号的三个窗口已复制并打开</strong><small>分别确认 A、B、C 的近期任务后，再完成接力。</small></div><div class="history-actions"><button class="mini-button" data-action="launch-room" ${running ? "disabled" : ""}>重新打开</button><button class="mini-button" data-action="verify-handoff">三条都正常，完成接力</button></div></div>` : ""}
     ${room.state === "handoff_source_pending_verification" ? `<div class="room-canonical"><div><strong>接力前恢复点</strong><small>新房间确认前，这里的数据不会被清理。</small></div></div>` : ""}
     ${room.state === "handed_off" ? `<div class="room-canonical"><div><strong>旧账号备份</strong><small>新房间已确认；需要空间时再移到废纸篓。</small></div><div class="history-actions"><button class="mini-button danger" data-action="cleanup-handoff">移到废纸篓</button></div></div>` : ""}
@@ -195,8 +198,27 @@ function bindHistoryActions() {
 function bindRoomActions() {
   document.querySelectorAll('[data-action="launch-room"]').forEach((button) => button.onclick = async () => {
     const roomId = button.closest(".room-card").dataset.room;
-    try { const result = await request(`/api/rooms/${roomId}/launch`, { method:"POST", body:"{}" }); toast(`已打开 ${result.opened} 个独立窗口`); setTimeout(() => loadStatus(false), 900); }
+    try {
+      const result = await request(`/api/rooms/${roomId}/launch`, { method:"POST", body:"{}" });
+      toast(result.opened ? `已打开 ${result.opened} 个窗口${result.alreadyRunning ? `，另有 ${result.alreadyRunning} 个原本就在运行` : ""}` : "这个房间的窗口已经全部运行");
+      setTimeout(() => loadStatus(false), 900);
+    }
     catch (error) { toast(error.message); }
+  });
+  document.querySelectorAll('[data-action="launch-branch"]').forEach((button) => button.onclick = async () => {
+    const roomId = button.closest(".room-card").dataset.room;
+    const conversationId = button.dataset.id;
+    button.disabled = true;
+    button.textContent = "打开中…";
+    try {
+      const result = await request(`/api/rooms/${roomId}/branches/${conversationId}/launch`, { method:"POST", body:"{}" });
+      toast(`窗口 ${result.label} 已打开`);
+      setTimeout(() => loadStatus(false), 900);
+    } catch (error) {
+      toast(error.message);
+      button.disabled = false;
+      button.textContent = "打开";
+    }
   });
   document.querySelectorAll('[data-action="handoff-room"]').forEach((button) => button.onclick = async () => {
     const card = button.closest(".room-card");

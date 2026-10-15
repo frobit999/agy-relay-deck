@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.3.1
+
+- Add an independent Open button to every branch in the current room.
+- Show per-branch running state from the exact `--conversation` process argument.
+- Change the room action dynamically between Open all, Open remaining, and All running.
+- Refuse to launch a duplicate process for a branch that is already active.
+
 ## 2.3.0
 
 - Replace the presentation-style dashboard with a quiet, task-first local utility interface.

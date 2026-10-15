@@ -86,9 +86,13 @@ h1 { margin-bottom: 7px; font-size: clamp(30px, 4vw, 46px); line-height: 1.05; l
 .branch-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 16px 18px 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
 .branch-card { min-width: 0; padding: 13px 14px; background: var(--surface); border-right: 1px solid var(--border); }
 .branch-card:last-child { border-right: 0; }
-.branch-card strong { display: flex; justify-content: space-between; gap: 9px; font-size: 13px; }
+.branch-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.branch-card strong { display: flex; flex: 1; justify-content: space-between; gap: 9px; font-size: 13px; }
 .branch-card strong span { color: var(--accent); font-variant-numeric: tabular-nums; }
 .branch-card small { display: block; overflow: hidden; margin-top: 5px; color: var(--faint); font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.branch-button { min-height: 27px; padding: 0 9px; color: var(--accent); background: transparent; border: 1px solid var(--border-strong); border-radius: 7px; font-size: 10px; }
+.branch-button:hover:not(:disabled) { background: var(--surface-raised); border-color: var(--accent); }
+.branch-button:disabled { color: var(--success); cursor: default; opacity: .75; }
 
 .room-progress { margin: 16px 18px 0; padding: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
 .job-step { display: grid; grid-template-columns: 14px 1fr; gap: 9px; padding: 0 0 12px; color: var(--muted); font-size: 11px; }
