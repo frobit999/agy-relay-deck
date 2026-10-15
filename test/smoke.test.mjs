@@ -101,3 +101,15 @@ test("successful shards do not depend on a fragile final consolidation turn", ()
   assert.doesNotMatch(server, /现在完成多窗口汇合/);
   assert.doesNotMatch(server, /最终汇合网络中断/);
 });
+
+test("whole-room account handoff preserves branches without semantic merging", () => {
+  const server = fs.readFileSync(path.join(root, "server.mjs"), "utf8");
+  const app = fs.readFileSync(path.join(root, "dist/app.js"), "utf8");
+  assert.match(server, /performRoomHandoff/);
+  assert.match(server, /handoffSourceConversationId/);
+  assert.match(server, /saveRoomsAtomic\(targetRoom, sourceRoom\)/);
+  assert.match(server, /handoff_pending_verification/);
+  assert.match(server, /handoff_failed_rolled_back/);
+  assert.match(app, /整房间换号继续/);
+  assert.match(app, /不会汇合或总结/);
+});

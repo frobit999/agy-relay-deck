@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
-test("demo mode creates three branches and merges them without real account access", async (t) => {
+test("demo mode hands off a whole room, verifies it, and can still merge later", async (t) => {
   const port = 18000 + (process.pid % 1000);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agy-relay-room-test-"));
   const child = spawn(process.execPath, ["server.mjs"], {
@@ -51,8 +51,45 @@ test("demo mode creates three branches and merges them without real account acce
   assert.equal(room.state, "ready");
   assert.equal(room.branches.length, 3);
 
+  const sourceRoomId = room.id;
+  const sourceBranchIds = room.branches.map((branch) => branch.conversationId);
+  const handoffResponse = await post(`/api/rooms/${room.id}/handoff`, { targetAccountId: "demo-c" });
+  assert.equal(handoffResponse.status, 202);
+  room = await handoffResponse.json();
+  if (room.state === "handoff_creating") {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    room = await (await fetch(`${base}/api/rooms/${room.id}`)).json();
+  }
+  assert.equal(room.state, "handoff_pending_verification");
+  assert.equal(room.handoffFromRoomId, sourceRoomId);
+  assert.equal(room.handoffSequence, 1);
+  assert.equal(room.branches.length, 3);
+  assert.deepEqual(room.branches.map((branch) => branch.label), ["A", "B", "C"]);
+  assert.equal(room.branches.some((branch) => sourceBranchIds.includes(branch.conversationId)), false);
+
+  let sourceRoom = await (await fetch(`${base}/api/rooms/${sourceRoomId}`)).json();
+  assert.equal(sourceRoom.state, "handoff_source_pending_verification");
+  assert.equal(sourceRoom.handoffSuccessorRoomId, room.id);
+
+  let lifecycleResponse = await post(`/api/rooms/${room.id}/verify-handoff`, {});
+  assert.equal(lifecycleResponse.status, 200);
+  room = await lifecycleResponse.json();
+  assert.equal(room.state, "ready");
+  sourceRoom = await (await fetch(`${base}/api/rooms/${sourceRoomId}`)).json();
+  assert.equal(sourceRoom.state, "handed_off");
+
+  lifecycleResponse = await post(`/api/rooms/${sourceRoomId}/cleanup-handoff`, {});
+  assert.equal(lifecycleResponse.status, 200);
+  sourceRoom = await lifecycleResponse.json();
+  assert.equal(sourceRoom.state, "handoff_cleaned");
+
+  lifecycleResponse = await post(`/api/rooms/${sourceRoomId}/restore`, {});
+  assert.equal(lifecycleResponse.status, 200);
+  sourceRoom = await lifecycleResponse.json();
+  assert.equal(sourceRoom.state, "handed_off");
+
   const mergedResponse = await post(`/api/rooms/${room.id}/merge`, {
-    targetAccountId: "demo-c",
+    targetAccountId: "demo-a",
     primaryBranchId: room.branches[0].conversationId,
   });
   assert.equal(mergedResponse.status, 202);
@@ -61,7 +98,7 @@ test("demo mode creates three branches and merges them without real account acce
   assert.equal(room.state, "merged_pending_verification");
   assert.match(room.canonicalConversationId, /^[0-9a-f-]{36}$/i);
 
-  let lifecycleResponse = await post(`/api/rooms/${room.id}/verify`, {});
+  lifecycleResponse = await post(`/api/rooms/${room.id}/verify`, {});
   assert.equal(lifecycleResponse.status, 200);
   room = await lifecycleResponse.json();
   assert.equal(room.state, "verified");

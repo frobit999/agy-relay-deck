@@ -363,6 +363,13 @@ function saveRoom(room) {
   roomJobs.set(room.id, room);
 }
 
+function saveRoomsAtomic(...updatedRooms) {
+  const ids = new Set(updatedRooms.map((room) => room.id));
+  const rooms = loadRooms().filter((item) => !ids.has(item.id));
+  writeJsonAtomic(ROOMS_FILE, [...updatedRooms, ...rooms].slice(0, 20));
+  for (const room of updatedRooms) roomJobs.set(room.id, room);
+}
+
 function updateRoom(room, patch = {}) {
   Object.assign(room, patch, { updatedAt: new Date().toISOString() });
   saveRoom(room);
@@ -429,6 +436,9 @@ function publicRoom(room, conversations = []) {
     workspace: room.workspace,
     accountId: room.accountId,
     targetAccountId: room.targetAccountId || null,
+    handoffFromRoomId: room.handoffFromRoomId || null,
+    handoffSuccessorRoomId: room.handoffSuccessorRoomId || null,
+    handoffSequence: room.handoffSequence || 0,
     primaryBranchId: room.primaryBranchId || null,
     canonicalConversationId: room.canonicalConversationId || null,
     error: room.error || null,
@@ -443,7 +453,7 @@ function publicRoom(room, conversations = []) {
   };
 }
 
-function moveRoomBranchesToTrash(room) {
+function moveRoomBranchesToTrash(room, nextState = "cleaned") {
   if (!UUID_RE.test(room.id)) throw new Error("房间编号不合法。");
   const branchIds = (room.branches || []).map((branch) => branch.conversationId);
   const blocking = activeAgyForConversations(branchIds);
@@ -492,11 +502,11 @@ function moveRoomBranchesToTrash(room) {
   const manifest = { roomId: room.id, createdAt: new Date().toISOString(), trashRoot, logicalBytes, moves };
   writeJsonAtomic(manifestFile, manifest);
   fs.writeFileSync(path.join(trashRoot, "restore-manifest.json"), JSON.stringify(manifest, null, 2), { mode: 0o600 });
-  updateRoom(room, { state: "cleaned", cleanupAt: manifest.createdAt, cleanupManifest: manifestFile, cleanupLogicalBytes: logicalBytes, error: null });
+  updateRoom(room, { state: nextState, cleanupAt: manifest.createdAt, cleanupManifest: manifestFile, cleanupLogicalBytes: logicalBytes, error: null });
   return manifest;
 }
 
-function restoreRoomBranches(room) {
+function restoreRoomBranches(room, nextState = "verified") {
   const branchIds = (room.branches || []).map((branch) => branch.conversationId);
   const blocking = activeAgyForConversations(branchIds);
   if (blocking.length) throw new Error("同编号的旧分支仍在运行，暂不能恢复。");
@@ -519,12 +529,12 @@ function restoreRoomBranches(room) {
     }
     throw error;
   }
-  updateRoom(room, { state: "verified", restoredAt: new Date().toISOString(), error: null });
+  updateRoom(room, { state: nextState, restoredAt: new Date().toISOString(), error: null });
 }
 
 function operationRunning() {
   return [...jobs.values()].some((job) => job.state === "running")
-    || [...roomJobs.values()].some((room) => ["creating", "merging"].includes(room.state));
+    || [...roomJobs.values()].some((room) => ["creating", "merging", "handoff_creating"].includes(room.state));
 }
 
 function sqliteBinary() {
@@ -782,6 +792,112 @@ async function performRoomFork(room) {
   } catch (error) {
     if (room.steps.at(-1)?.state === "running") room.steps[room.steps.length - 1].state = "failed";
     updateRoom(room, { state: "failed", error: error.message || String(error) });
+  }
+}
+
+async function performRoomHandoff(sourceRoom, targetRoom, targetAccountId) {
+  const transplanted = [];
+  let accountSwitched = false;
+  try {
+    if (DEMO) {
+      targetRoom.branches = sourceRoom.branches.map((branch) => ({
+        ...branch,
+        conversationId: crypto.randomUUID(),
+        createdAt: new Date().toISOString(),
+        handoffSourceConversationId: branch.conversationId,
+        backups: null,
+      }));
+      addRoomStep(targetRoom, "演示整房间接力完成", "done", `${targetRoom.branches.length} 个窗口已逐一原样复制`);
+      Object.assign(sourceRoom, { state: "handoff_source_pending_verification", handoffSuccessorRoomId: targetRoom.id, updatedAt: new Date().toISOString() });
+      Object.assign(targetRoom, { state: "handoff_pending_verification", error: null, updatedAt: new Date().toISOString() });
+      saveRoomsAtomic(targetRoom, sourceRoom);
+      return;
+    }
+    if (agyProcesses().length) throw new Error("请先退出所有 agy 窗口。换号会改变全局登录状态，不能让其他窗口继续使用旧凭据。");
+    if (!(await managerOnline())) throw new Error("Antigravity Tools 没有运行。请先启动 Tools。");
+    const agy = agyBinary();
+    if (!agy) throw new Error("找不到 agy。请确认 Antigravity CLI 已安装。");
+    if (!sourceRoom.branches?.length) throw new Error("这个房间没有可接力的窗口。");
+
+    const sourceStats = new Map();
+    for (const branch of sourceRoom.branches) {
+      const db = path.join(AGY_ROOT, "conversations", `${branch.conversationId}.db`);
+      if (!fs.existsSync(db)) throw new Error(`窗口 ${branch.label} 的数据库不存在。`);
+      sourceStats.set(branch.conversationId, conversationDbStats(branch.conversationId));
+    }
+    addRoomStep(targetRoom, "冻结旧房间", "done", `${sourceRoom.branches.length} 个源窗口均已关闭且数据库可读`);
+
+    const account = await switchToAccount(targetAccountId);
+    accountSwitched = true;
+    addRoomStep(targetRoom, "切换额度账号", "done", account.name);
+    const workspace = sourceRoom.workspace && fs.existsSync(sourceRoom.workspace) ? sourceRoom.workspace : HOME;
+
+    for (let index = 0; index < sourceRoom.branches.length; index += 1) {
+      const sourceBranch = sourceRoom.branches[index];
+      addRoomStep(targetRoom, `接力窗口 ${sourceBranch.label}`, "running", `${index + 1}/${sourceRoom.branches.length} · 建立新账号身份绑定`);
+      const targetConversationId = await createPlaceholder(agy, workspace, `ROOM_HANDOFF_${sourceBranch.label}_READY`);
+      const report = await transplantConversation(
+        sourceBranch.conversationId,
+        targetConversationId,
+        `${sourceRoom.sourceTitle} · 窗口 ${sourceBranch.label}`,
+      );
+      transplanted.push({ targetConversationId, backups: report.automatic_backups || null });
+      const sourceStat = sourceStats.get(sourceBranch.conversationId);
+      const targetStat = conversationDbStats(targetConversationId);
+      if (targetStat.stepCount !== sourceStat.stepCount || targetStat.maxStepIndex !== sourceStat.maxStepIndex) {
+        throw new Error(`窗口 ${sourceBranch.label} 的最终轨迹复核不一致。`);
+      }
+      const branch = {
+        ...sourceBranch,
+        conversationId: targetConversationId,
+        createdAt: new Date().toISOString(),
+        handoffSourceConversationId: sourceBranch.conversationId,
+        handoffSourceStepCount: sourceStat.stepCount,
+        backups: report.automatic_backups || null,
+      };
+      targetRoom.branches.push(branch);
+      targetRoom.steps[targetRoom.steps.length - 1] = {
+        label: `接力窗口 ${sourceBranch.label}`,
+        state: "done",
+        detail: `${targetConversationId.slice(0, 8)}… · ${targetStat.stepCount.toLocaleString()} 条轨迹完全一致`,
+        at: new Date().toISOString(),
+      };
+      updateRoom(targetRoom);
+    }
+
+    addRoomStep(targetRoom, "整房间三重验证通过", "done", "每个窗口的数据库完整性、轨迹数量和新账号绑定均已验证");
+    Object.assign(sourceRoom, {
+      state: "handoff_source_pending_verification",
+      handoffSuccessorRoomId: targetRoom.id,
+      updatedAt: new Date().toISOString(),
+      error: null,
+    });
+    Object.assign(targetRoom, {
+      state: "handoff_pending_verification",
+      completedAt: new Date().toISOString(),
+      error: null,
+      updatedAt: new Date().toISOString(),
+    });
+    saveRoomsAtomic(targetRoom, sourceRoom);
+
+    let opened = 0;
+    for (const branch of targetRoom.branches) {
+      try { launchConversation(branch.conversationId, workspace); opened += 1; } catch { /* keep the verified room available for manual launch */ }
+    }
+    addRoomStep(targetRoom, "打开新账号窗口", opened === targetRoom.branches.length ? "done" : "failed", `${opened}/${targetRoom.branches.length} 个窗口已打开；未打开的可从面板重试`);
+  } catch (error) {
+    if (targetRoom.steps.at(-1)?.state === "running") targetRoom.steps[targetRoom.steps.length - 1].state = "failed";
+    const rollbackErrors = [];
+    for (const item of [...transplanted].reverse()) {
+      try { restoreBackupFiles(item); } catch (rollbackError) { rollbackErrors.push(rollbackError.message || String(rollbackError)); }
+    }
+    if (accountSwitched && sourceRoom.accountId) {
+      try { await switchToAccount(sourceRoom.accountId); } catch (rollbackError) { rollbackErrors.push(`账号恢复失败：${rollbackError.message || rollbackError}`); }
+    }
+    const originalError = error.message || String(error);
+    const state = rollbackErrors.length ? "handoff_rollback_failed" : "handoff_failed_rolled_back";
+    if (!rollbackErrors.length) addRoomStep(targetRoom, "接力已自动回滚", "done", "旧 A/B/C 完全未修改，当前账号也已恢复");
+    updateRoom(targetRoom, { state, error: rollbackErrors.length ? `${originalError}；${rollbackErrors.join("；")}` : originalError });
   }
 }
 
@@ -1079,6 +1195,65 @@ async function api(req, res, url) {
     for (const branch of room.branches) launchConversation(branch.conversationId, room.workspace);
     return sendJson(res, 200, { ok: true, opened: room.branches.length });
   }
+  const handoffRoomMatch = url.pathname.match(/^\/api\/rooms\/([0-9a-f-]+)\/handoff$/i);
+  if (handoffRoomMatch) {
+    const sourceRoom = roomById(handoffRoomMatch[1]);
+    if (!sourceRoom) return sendJson(res, 404, { error: "找不到这个并行房间" });
+    if (sourceRoom.state !== "ready") return sendJson(res, 409, { error: "只有正在使用的并行房间可以整房间换号" });
+    if (!body.targetAccountId) return sendJson(res, 400, { error: "请选择接力后的账号" });
+    if (body.targetAccountId === sourceRoom.accountId) return sendJson(res, 409, { error: "目标账号与当前房间账号相同，无需接力" });
+    if (operationRunning()) return sendJson(res, 409, { error: "已有一个接力或房间操作正在进行" });
+    const targetRoom = {
+      id: crypto.randomUUID(),
+      state: "handoff_creating",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      sourceConversationId: sourceRoom.sourceConversationId,
+      sourceTitle: sourceRoom.sourceTitle,
+      sourceStepCount: sourceRoom.sourceStepCount ?? null,
+      workspace: sourceRoom.workspace,
+      accountId: body.targetAccountId,
+      generation: roomGeneration(sourceRoom),
+      handoffFromRoomId: sourceRoom.id,
+      handoffSequence: Number(sourceRoom.handoffSequence || 0) + 1,
+      branchCount: sourceRoom.branches.length,
+      branches: [],
+      steps: [],
+      error: null,
+    };
+    saveRoom(targetRoom);
+    performRoomHandoff(sourceRoom, targetRoom, body.targetAccountId);
+    return sendJson(res, 202, publicRoom(targetRoom, queryConversations(100)));
+  }
+  const verifyHandoffMatch = url.pathname.match(/^\/api\/rooms\/([0-9a-f-]+)\/verify-handoff$/i);
+  if (verifyHandoffMatch) {
+    const room = roomById(verifyHandoffMatch[1]);
+    if (!room) return sendJson(res, 404, { error: "找不到这个接力房间" });
+    if (room.state !== "handoff_pending_verification" || !room.handoffFromRoomId) return sendJson(res, 409, { error: "这个房间没有等待确认的换号接力" });
+    const sourceRoom = roomById(room.handoffFromRoomId);
+    if (!sourceRoom) return sendJson(res, 409, { error: "找不到接力前的安全备份房间" });
+    if (!DEMO) {
+      for (const branch of room.branches || []) {
+        const stats = conversationDbStats(branch.conversationId);
+        if (stats.stepCount < Number(branch.handoffSourceStepCount || 1)) return sendJson(res, 409, { error: `窗口 ${branch.label} 的轨迹数量异常，暂不能确认` });
+      }
+    }
+    Object.assign(room, { state: "ready", verifiedAt: new Date().toISOString(), updatedAt: new Date().toISOString(), error: null });
+    Object.assign(sourceRoom, { state: "handed_off", updatedAt: new Date().toISOString(), error: null });
+    saveRoomsAtomic(room, sourceRoom);
+    return sendJson(res, 200, publicRoom(room, queryConversations(100)));
+  }
+  const cleanupHandoffMatch = url.pathname.match(/^\/api\/rooms\/([0-9a-f-]+)\/cleanup-handoff$/i);
+  if (cleanupHandoffMatch) {
+    const room = roomById(cleanupHandoffMatch[1]);
+    if (!room) return sendJson(res, 404, { error: "找不到这个旧房间" });
+    if (room.state !== "handed_off" || !room.handoffSuccessorRoomId) return sendJson(res, 409, { error: "这个房间还不是已验证的旧账号备份" });
+    const successor = roomById(room.handoffSuccessorRoomId);
+    if (!successor || successor.state !== "ready") return sendJson(res, 409, { error: "新账号房间尚未验证，不能清理旧副本" });
+    if (DEMO) updateRoom(room, { state: "handoff_cleaned", cleanupAt: new Date().toISOString(), error: null });
+    else moveRoomBranchesToTrash(room, "handoff_cleaned");
+    return sendJson(res, 200, publicRoom(room, queryConversations(100)));
+  }
   const mergeRoomMatch = url.pathname.match(/^\/api\/rooms\/([0-9a-f-]+)\/merge$/i);
   if (mergeRoomMatch) {
     const room = roomById(mergeRoomMatch[1]);
@@ -1123,9 +1298,10 @@ async function api(req, res, url) {
   if (restoreRoomMatch) {
     const room = roomById(restoreRoomMatch[1]);
     if (!room) return sendJson(res, 404, { error: "找不到这个并行房间" });
-    if (room.state !== "cleaned") return sendJson(res, 409, { error: "这个房间当前没有已清理分支" });
-    if (DEMO) updateRoom(room, { state: "verified", restoredAt: new Date().toISOString(), error: null });
-    else restoreRoomBranches(room);
+    if (!["cleaned", "handoff_cleaned"].includes(room.state)) return sendJson(res, 409, { error: "这个房间当前没有已清理分支" });
+    const nextState = room.state === "handoff_cleaned" ? "handed_off" : "verified";
+    if (DEMO) updateRoom(room, { state: nextState, restoredAt: new Date().toISOString(), error: null });
+    else restoreRoomBranches(room, nextState);
     return sendJson(res, 200, publicRoom(room, queryConversations(100)));
   }
   if (url.pathname === "/api/handoffs") {

@@ -129,10 +129,11 @@ h2 { margin: 0; font-size: clamp(23px, 2vw, 30px); font-weight: 550; letter-spac
 .room-card-title strong { display: block; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .room-card-title small { display: block; color: var(--dim); margin-top: 4px; font: 11px ui-monospace, monospace; }
 .room-state { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 99px; padding: 5px 9px; color: var(--muted); font-size: 11px; }
-.room-state.ready, .room-state.verified, .room-state.cleaned { color: var(--green); border-color: rgba(101,239,176,.24); background: rgba(101,239,176,.06); }
+.room-state.ready, .room-state.verified, .room-state.cleaned, .room-state.handed_off, .room-state.handoff_cleaned { color: var(--green); border-color: rgba(101,239,176,.24); background: rgba(101,239,176,.06); }
 .room-state.merged, .room-state.merged_pending_verification { color: var(--amber); border-color: rgba(255,191,105,.24); background: rgba(255,191,105,.06); }
-.room-state.creating, .room-state.merging { color: var(--cyan); border-color: rgba(89,229,255,.24); background: rgba(89,229,255,.06); }
-.room-state.failed, .room-state.merge_failed, .room-state.merge_failed_rolled_back, .room-state.merge_rollback_failed { color: var(--red); border-color: rgba(255,107,124,.22); background: rgba(255,107,124,.06); }
+.room-state.handoff_pending_verification, .room-state.handoff_source_pending_verification { color: var(--amber); border-color: rgba(255,191,105,.24); background: rgba(255,191,105,.06); }
+.room-state.creating, .room-state.merging, .room-state.handoff_creating { color: var(--cyan); border-color: rgba(89,229,255,.24); background: rgba(89,229,255,.06); }
+.room-state.failed, .room-state.merge_failed, .room-state.merge_failed_rolled_back, .room-state.merge_rollback_failed, .room-state.handoff_failed_rolled_back, .room-state.handoff_rollback_failed { color: var(--red); border-color: rgba(255,107,124,.22); background: rgba(255,107,124,.06); }
 .branch-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-top: 16px; }
 .branch-card { padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: rgba(19, 29, 42, .42); }
 .branch-card strong { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
@@ -143,6 +144,12 @@ h2 { margin: 0; font-size: clamp(23px, 2vw, 30px); font-weight: 550; letter-spac
 .room-controls { display: grid; grid-template-columns: auto minmax(180px, .9fr) minmax(200px, 1fr) auto; gap: 8px; align-items: center; margin-top: 15px; }
 .room-controls select { min-height: 40px; font-size: 12px; }
 .room-controls .secondary-button, .room-controls .primary-button { min-height: 40px; width: auto; padding: 8px 12px; font-size: 12px; }
+.handoff-controls { grid-template-columns: auto minmax(240px, 1fr) minmax(180px, auto); padding: 10px; border: 1px solid rgba(89,229,255,.18); border-radius: 12px; background: rgba(89,229,255,.035); }
+.advanced-room-actions { margin-top: 9px; color: var(--dim); font-size: 11px; }
+.advanced-room-actions summary { cursor: pointer; padding: 7px 2px; user-select: none; }
+.advanced-room-actions[open] summary { color: var(--muted); }
+.merge-controls { grid-template-columns: minmax(180px,.9fr) minmax(220px,1fr) auto; margin-top: 4px; }
+.handoff-verification { border-color: rgba(89,229,255,.2); background: rgba(89,229,255,.035); }
 .room-canonical { display: flex; justify-content: space-between; gap: 14px; align-items: center; margin-top: 15px; padding: 14px; border: 1px solid rgba(101,239,176,.18); border-radius: 10px; background: rgba(101,239,176,.05); }
 .room-canonical strong { font-size: 13px; }.room-canonical small { display: block; color: var(--dim); margin-top: 3px; }
 .room-error { margin-top: 13px; color: #ff9aa6; font-size: 12px; }

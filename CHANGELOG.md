@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.2.0
+
+- Add transactional whole-room account handoff: A→A′, B→B′, C→C′ without merging or summarizing branches.
+- Keep the original room untouched until every target conversation passes database, row-count, and binding verification.
+- Restore the previous account and target placeholders automatically when a room handoff fails.
+- Open the new room automatically, require explicit user verification, and retain the old room as a recoverable safety point.
+- Allow verified old-account copies to be moved to macOS Trash and restored before Trash is emptied.
+- Move semantic branch convergence behind an advanced disclosure so routine quota changes use exact per-window handoff.
+
 ## 2.1.0
 
 - Remove the mandatory final model-generated consolidation turn after all merge shards succeed.
