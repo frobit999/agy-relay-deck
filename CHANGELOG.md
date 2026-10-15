@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.3.0
+
+- Replace the presentation-style dashboard with a quiet, task-first local utility interface.
+- Put the newest usable room in a dedicated current-work card with persistent window status and actions.
+- Collapse previous generations, recovery points, and failed attempts into a compact room archive.
+- Move account quota and launch permissions into a narrow contextual sidebar.
+- Hide room creation, single-conversation relay, and semantic branch merge behind explicit disclosures.
+- Remove decorative gradients, oversized slogans, particle/noise effects, and control-deck terminology.
+
 ## 2.2.0
 
 - Add transactional whole-room account handoff: A→A′, B→B′, C→C′ without merging or summarizing branches.

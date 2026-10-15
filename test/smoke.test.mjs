@@ -65,7 +65,7 @@ test("dangerous launch mode is explicit, persisted, and disabled by default", ()
   assert.match(server, /"--dangerously-skip-permissions"/);
   assert.match(server, /SETTINGS_FILE/);
   assert.match(html, /id="skip-permissions"/);
-  assert.match(html, /危险：自动放行工具操作/);
+  assert.match(html, /模型可直接执行工具操作/);
 });
 
 test("generation cleanup is verification-gated and recoverable", () => {
@@ -110,6 +110,6 @@ test("whole-room account handoff preserves branches without semantic merging", (
   assert.match(server, /saveRoomsAtomic\(targetRoom, sourceRoom\)/);
   assert.match(server, /handoff_pending_verification/);
   assert.match(server, /handoff_failed_rolled_back/);
-  assert.match(app, /整房间换号继续/);
+  assert.match(app, /整房间换号/);
   assert.match(app, /不会汇合或总结/);
 });
