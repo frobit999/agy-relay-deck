@@ -78,6 +78,15 @@ test("demo mode hands off a whole room, verifies it, and can still merge later",
   sourceRoom = await (await fetch(`${base}/api/rooms/${sourceRoomId}`)).json();
   assert.equal(sourceRoom.state, "handed_off");
 
+  const cloneResponse = await post(`/api/rooms/${room.id}/branches/${room.branches[0].conversationId}/clone`, {});
+  assert.equal(cloneResponse.status, 202);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  room = await (await fetch(`${base}/api/rooms/${room.id}`)).json();
+  assert.equal(room.state, "ready");
+  assert.equal(room.branches.length, 4);
+  assert.equal(room.branches[3].label, "D");
+  assert.equal(room.branches[3].clonedFromLabel, "A");
+
   lifecycleResponse = await post(`/api/rooms/${sourceRoomId}/cleanup-handoff`, {});
   assert.equal(lifecycleResponse.status, 200);
   sourceRoom = await lifecycleResponse.json();

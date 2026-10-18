@@ -104,7 +104,7 @@ function renderRoomSetup(conversations) {
 }
 
 function roomStateLabel(value) {
-  return ({ creating:"正在分裂", ready:"并行中", handoff_creating:"正在整房间换号", handoff_pending_verification:"新房间待确认", handoff_source_pending_verification:"旧房间安全保留", handed_off:"旧账号备份", handoff_cleaned:"旧账号副本已收纳", handoff_failed_rolled_back:"换号失败但已回滚", handoff_rollback_failed:"换号回滚需检查", merging:"正在汇合", merged:"待验证", merged_pending_verification:"待验证", verified:"母会话已验证", cleaned:"上一代已移到废纸篓", failed:"创建失败", merge_failed:"汇合失败", merge_failed_rolled_back:"失败但已回滚", merge_rollback_failed:"需要人工检查" })[value] || value;
+  return ({ creating:"正在分裂", branching:"正在复制分支", ready:"并行中", handoff_creating:"正在整房间换号", handoff_pending_verification:"新房间待确认", handoff_source_pending_verification:"旧房间安全保留", handed_off:"旧账号备份", handoff_cleaned:"旧账号副本已收纳", handoff_failed_rolled_back:"换号失败但已回滚", handoff_rollback_failed:"换号回滚需检查", merging:"正在汇合", merged:"待验证", merged_pending_verification:"待验证", verified:"母会话已验证", cleaned:"上一代已移到废纸篓", failed:"创建失败", merge_failed:"汇合失败", merge_failed_rolled_back:"失败但已回滚", merge_rollback_failed:"需要人工检查" })[value] || value;
 }
 
 function roomCanMerge(room) { return ["ready", "merge_failed", "merge_failed_rolled_back"].includes(room.state); }
@@ -115,21 +115,22 @@ function roomTitle(room) {
 }
 
 function chooseCurrentRoom(rooms) {
-  const candidates = rooms.filter((room) => ["creating", "ready", "handoff_creating", "handoff_pending_verification", "merging", "merged", "merged_pending_verification"].includes(room.state));
+  const candidates = rooms.filter((room) => ["creating", "branching", "ready", "handoff_creating", "handoff_pending_verification", "merging", "merged", "merged_pending_verification"].includes(room.state));
   return [...candidates].sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))[0] || null;
 }
 
 function roomCard(room, primary = false) {
   const accounts = state.data?.accounts || [];
   const runningCount = state.data?.agy?.runningPids?.length || 0;
+  const toolsOnline = state.data?.manager?.online === true;
   const runningIds = new Set((state.data?.agy?.runningConversationIds || []).map((id) => id.toLowerCase()));
   const roomRunningCount = room.branches.filter((branch) => runningIds.has(branch.conversationId.toLowerCase())).length;
   const missingCount = room.branches.length - roomRunningCount;
   const running = runningCount > 0;
-  const active = ["creating", "merging", "handoff_creating"].includes(room.state);
+  const active = ["creating", "branching", "merging", "handoff_creating"].includes(room.state);
   const steps = (room.steps || []).slice(-7);
   const chosenPrimary = room.primaryBranchId || room.recommendedPrimaryBranchId;
-  const primaryOptions = room.branches.map((branch) => `<option value="${escapeHtml(branch.conversationId)}" ${chosenPrimary === branch.conversationId ? "selected" : ""}>窗口 ${escapeHtml(branch.label)} · 完整保留${branch.conversationId === room.recommendedPrimaryBranchId ? " · 推荐" : ""}</option>`).join("");
+  const primaryOptions = room.branches.filter((branch) => !branch.clonedFromLabel).map((branch) => `<option value="${escapeHtml(branch.conversationId)}" ${chosenPrimary === branch.conversationId ? "selected" : ""}>窗口 ${escapeHtml(branch.label)} · 完整主干${branch.conversationId === room.recommendedPrimaryBranchId ? " · 推荐" : ""}</option>`).join("");
   const mergeAccounts = accountOptions(accounts, "汇合后使用哪个账号");
   const handoffAccounts = accountOptions(accounts.filter((account) => account.id !== room.accountId), "选择下一个账号");
   const totalAdded = room.branches.reduce((sum, branch) => sum + (branch.addedSteps || 0), 0);
@@ -137,7 +138,7 @@ function roomCard(room, primary = false) {
   const showProgress = steps.length && (active || /failed/.test(room.state) || room.state === "handoff_pending_verification");
   return `<article class="room-card ${primary ? "primary-room" : ""} ${active ? "active" : ""}" data-room="${escapeHtml(room.id)}" data-workspace="${escapeHtml(room.workspace || "")}">
     <div class="room-card-head"><div class="room-card-title"><strong>${escapeHtml(roomTitle(room))}</strong><small>${escapeHtml(room.id.slice(0, 8))} · ${room.branches.length} 个窗口 · ${escapeHtml(relativeTime(room.updatedAt))}</small></div><span class="room-state ${escapeHtml(room.state)}">${escapeHtml(roomStateLabel(room.state))}</span></div>
-    ${room.branches.length ? `<div class="branch-grid">${room.branches.map((branch) => { const branchRunning = runningIds.has(branch.conversationId.toLowerCase()); return `<div class="branch-card"><div class="branch-top"><strong><span>窗口 ${escapeHtml(branch.label)}</span><span>${branch.addedSteps === null ? "—" : `+${Number(branch.addedSteps).toLocaleString()}`}</span></strong>${primary && ["ready","handoff_pending_verification"].includes(room.state) ? `<button class="branch-button" data-action="launch-branch" data-id="${escapeHtml(branch.conversationId)}" ${branchRunning ? "disabled" : ""}>${branchRunning ? "运行中" : "打开"}</button>` : ""}</div><small>${escapeHtml(branch.conversationId.slice(0, 8))} · ${branch.currentStepCount === null ? "—" : Number(branch.currentStepCount).toLocaleString()} steps · ${escapeHtml(formatBytes(branch.currentBytes))}</small></div>`; }).join("")}</div>` : ""}
+    ${room.branches.length ? `<div class="branch-grid">${room.branches.map((branch) => { const branchRunning = runningIds.has(branch.conversationId.toLowerCase()); return `<div class="branch-card"><div class="branch-top"><strong><span>窗口 ${escapeHtml(branch.label)}${branch.clonedFromLabel ? `<em>从 ${escapeHtml(branch.clonedFromLabel)} 分支</em>` : ""}</span><span>${branch.addedSteps === null ? "—" : `+${Number(branch.addedSteps).toLocaleString()}`}</span></strong>${primary && ["ready","handoff_pending_verification"].includes(room.state) ? `<div class="branch-actions"><button class="branch-button" data-action="launch-branch" data-id="${escapeHtml(branch.conversationId)}" ${branchRunning ? "disabled" : ""}>${branchRunning ? "运行中" : "打开"}</button>${room.state === "ready" && room.branches.length < 6 ? `<button class="branch-button clone" data-action="clone-branch" data-id="${escapeHtml(branch.conversationId)}" ${branchRunning || !toolsOnline ? "disabled" : ""}>${branchRunning ? "关闭后复制" : !toolsOnline ? "先启动 Tools" : "复制"}</button>` : ""}</div>` : ""}</div><small>${escapeHtml(branch.conversationId.slice(0, 8))} · ${branch.currentStepCount === null ? "—" : Number(branch.currentStepCount).toLocaleString()} steps · ${escapeHtml(formatBytes(branch.currentBytes))}</small></div>`; }).join("")}</div>` : ""}
     ${showProgress ? `<div class="room-progress">${steps.map((step) => `<div class="job-step ${escapeHtml(step.state)}"><i></i><span><strong>${escapeHtml(step.label)}</strong>${step.detail ? `<small>${escapeHtml(step.detail)}</small>` : ""}</span></div>`).join("")}${room.error ? `<div class="room-error">${escapeHtml(room.error)}</div>` : ""}</div>` : ""}
     ${roomCanMerge(room) ? `<div class="room-controls handoff-controls"><div class="running-copy"><strong>${roomRunningCount ? `${roomRunningCount}/${room.branches.length} 个窗口正在运行` : "窗口当前已关闭"}</strong><small>${running ? "关闭所有 agy 窗口后才能换号" : "可以单独打开，也可以整房间换号"}</small></div><button class="button secondary-button launch-room" data-action="launch-room" ${missingCount === 0 ? "disabled" : ""}>${missingCount === 0 ? "全部运行中" : roomRunningCount ? `打开其余 ${missingCount} 个` : "打开全部窗口"}</button><div class="handoff-form"><select data-role="handoff-account">${handoffAccounts}</select><button class="button primary-button" data-action="handoff-room" ${running ? "disabled" : ""}>整房间换号</button></div></div><details class="advanced-room-actions"><summary>高级操作：汇合三个分支</summary><div class="room-controls merge-controls"><select data-role="primary">${primaryOptions}</select><select data-role="merge-account">${mergeAccounts}</select><button class="button secondary-button" data-action="merge-room" ${running || totalAdded === 0 ? "disabled" : ""}>${totalAdded === 0 ? "暂无增量" : "汇合成母会话"}</button></div></details>` : ""}
     ${room.state === "handoff_pending_verification" ? `<div class="room-canonical handoff-verification"><div><strong>新账号的三个窗口已复制并打开</strong><small>分别确认 A、B、C 的近期任务后，再完成接力。</small></div><div class="history-actions"><button class="mini-button" data-action="launch-room" ${running ? "disabled" : ""}>重新打开</button><button class="mini-button" data-action="verify-handoff">三条都正常，完成接力</button></div></div>` : ""}
@@ -219,6 +220,18 @@ function bindRoomActions() {
       button.disabled = false;
       button.textContent = "打开";
     }
+  });
+  document.querySelectorAll('[data-action="clone-branch"]').forEach((button) => button.onclick = async () => {
+    const card = button.closest(".room-card");
+    const roomId = card.dataset.room;
+    const conversationId = button.dataset.id;
+    const branch = state.data.rooms.find((room) => room.id === roomId)?.branches.find((item) => item.conversationId === conversationId);
+    if (!branch) return toast("找不到这个窗口");
+    if (!confirm(`从窗口 ${branch.label} 当前保存点复制一个独立分支？原窗口不会修改；新分支会保持关闭，避免额外占用内存。`)) return;
+    try {
+      const room = await request(`/api/rooms/${roomId}/branches/${conversationId}/clone`, { method:"POST", body:"{}" });
+      replaceRoom(room); renderRooms(state.data.rooms); updateButtons(); pollRoom(room.id);
+    } catch (error) { toast(error.message); await loadStatus(false); }
   });
   document.querySelectorAll('[data-action="handoff-room"]').forEach((button) => button.onclick = async () => {
     const card = button.closest(".room-card");
@@ -325,7 +338,7 @@ async function pollRoom(id) {
   const poll = async () => {
     try {
       const room = await request(`/api/rooms/${id}`); replaceRoom(room); renderRooms(state.data.rooms); updateButtons();
-      if (!["creating", "merging", "handoff_creating"].includes(room.state)) {
+      if (!["creating", "branching", "merging", "handoff_creating"].includes(room.state)) {
         clearInterval(state.roomPoller); await loadStatus(false);
         if (room.state === "ready") toast("并行房间已就绪，可以打开全部窗口");
         else if (room.state === "handoff_pending_verification") toast("新账号的 A/B/C 已全部接好并打开，请逐一确认记忆");

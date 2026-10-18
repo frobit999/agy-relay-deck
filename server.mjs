@@ -415,6 +415,7 @@ function publicRoom(room, conversations = []) {
     return {
       label: branch.label,
       conversationId: branch.conversationId,
+      clonedFromLabel: branch.clonedFromLabel || null,
       createdAt: branch.createdAt,
       baselineStepCount: branch.baselineStepCount,
       currentStepCount: currentSteps,
@@ -424,7 +425,7 @@ function publicRoom(room, conversations = []) {
         : null,
     };
   });
-  const recommended = [...branchViews].sort((a, b) => (b.addedSteps ?? -1) - (a.addedSteps ?? -1))[0]?.conversationId || null;
+  const recommended = branchViews.filter((branch) => !branch.clonedFromLabel).sort((a, b) => (b.addedSteps ?? -1) - (a.addedSteps ?? -1))[0]?.conversationId || null;
   const cleanupManifest = room.cleanupManifest ? jsonFile(room.cleanupManifest, null) : null;
   return {
     id: room.id,
@@ -534,7 +535,7 @@ function restoreRoomBranches(room, nextState = "verified") {
 
 function operationRunning() {
   return [...jobs.values()].some((job) => job.state === "running")
-    || [...roomJobs.values()].some((room) => ["creating", "merging", "handoff_creating"].includes(room.state));
+    || [...roomJobs.values()].some((room) => ["creating", "branching", "merging", "handoff_creating"].includes(room.state));
 }
 
 function sqliteBinary() {
@@ -795,6 +796,86 @@ async function performRoomFork(room) {
   }
 }
 
+async function performBranchClone(room, sourceBranch) {
+  let target = null;
+  try {
+    if (DEMO) {
+      const used = new Set(room.branches.map((branch) => branch.label));
+      const label = ["A", "B", "C", "D", "E", "F"].find((candidate) => !used.has(candidate));
+      room.branches.push({
+        label,
+        conversationId: crypto.randomUUID(),
+        clonedFromLabel: sourceBranch.label,
+        createdAt: new Date().toISOString(),
+        baselineStepCount: sourceBranch.currentStepCount || sourceBranch.baselineStepCount || 0,
+        baselineMaxStepIndex: sourceBranch.baselineMaxStepIndex || -1,
+        backups: null,
+      });
+      addRoomStep(room, `复制窗口 ${sourceBranch.label} → ${label}`, "done", "演示分支已创建");
+      updateRoom(room, { state: "ready", branchCount: room.branches.length, error: null });
+      return;
+    }
+    if (activeAgyForConversations([sourceBranch.conversationId]).length) throw new Error(`请先关闭窗口 ${sourceBranch.label}，确保复制点已经完整写入磁盘。`);
+    if (!(await managerOnline())) throw new Error("Antigravity Tools 没有运行。请先启动 Tools。");
+    const agy = agyBinary();
+    if (!agy) throw new Error("找不到 agy。请确认 Antigravity CLI 已安装。");
+    const currentAccount = readAccounts().find((account) => account.current);
+    if (!currentAccount || currentAccount.id !== room.accountId) {
+      if (agyProcesses().length) throw new Error("当前 Tools 账号与房间账号不同。请先关闭所有 agy 窗口，再复制分支。");
+      await switchToAccount(room.accountId);
+      addRoomStep(room, "恢复房间账号", "done", "已切回这个房间使用的账号");
+    }
+    const used = new Set(room.branches.map((branch) => branch.label));
+    const label = ["A", "B", "C", "D", "E", "F"].find((candidate) => !used.has(candidate));
+    if (!label) throw new Error("一个房间最多保留 6 个窗口。");
+    const sourceStats = conversationDbStats(sourceBranch.conversationId);
+    const workspace = room.workspace && fs.existsSync(room.workspace) ? room.workspace : HOME;
+    addRoomStep(room, `复制窗口 ${sourceBranch.label} → ${label}`, "running", "正在创建独立对话与账号绑定");
+    const targetConversationId = await createPlaceholder(agy, workspace, `ROOM_BRANCH_${label}_READY`);
+    const report = await transplantConversation(
+      sourceBranch.conversationId,
+      targetConversationId,
+      `${room.sourceTitle} · 窗口 ${label}（从 ${sourceBranch.label} 分支）`,
+    );
+    target = { targetConversationId, backups: report.automatic_backups || null };
+    const targetStats = conversationDbStats(targetConversationId);
+    if (targetStats.stepCount !== sourceStats.stepCount || targetStats.maxStepIndex !== sourceStats.maxStepIndex) {
+      throw new Error(`窗口 ${label} 的轨迹复核不一致。`);
+    }
+    room.branches.push({
+      label,
+      conversationId: targetConversationId,
+      clonedFromLabel: sourceBranch.label,
+      createdAt: new Date().toISOString(),
+      baselineStepCount: sourceStats.stepCount,
+      baselineMaxStepIndex: sourceStats.maxStepIndex,
+      backups: report.automatic_backups || null,
+    });
+    room.steps[room.steps.length - 1] = {
+      label: `复制窗口 ${sourceBranch.label} → ${label}`,
+      state: "done",
+      detail: `${targetConversationId.slice(0, 8)}… · ${targetStats.stepCount.toLocaleString()} 条轨迹完全一致`,
+      at: new Date().toISOString(),
+    };
+    updateRoom(room, { state: "ready", branchCount: room.branches.length, error: null });
+  } catch (error) {
+    if (room.steps.at(-1)?.state === "running") room.steps[room.steps.length - 1].state = "failed";
+    const originalError = error.message || String(error);
+    if (target?.backups?.database) {
+      try {
+        restoreBackupFiles(target);
+        addRoomStep(room, "分支目标已自动回滚", "done", "原窗口完全未修改");
+        updateRoom(room, { state: "ready", error: originalError });
+        return;
+      } catch (rollbackError) {
+        updateRoom(room, { state: "ready", error: `${originalError}；目标回滚失败：${rollbackError.message || rollbackError}` });
+        return;
+      }
+    }
+    updateRoom(room, { state: "ready", error: originalError });
+  }
+}
+
 async function performRoomHandoff(sourceRoom, targetRoom, targetAccountId) {
   const transplanted = [];
   let accountSwitched = false;
@@ -1051,7 +1132,7 @@ async function performHandoff(job) {
 function restoreBackupFiles(job) {
   if (!job?.backups?.database || !job.targetConversationId) throw new Error("这个接力没有可用的自动备份。");
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(job.targetConversationId)) throw new Error("备份记录中的目标对话编号不合法。");
-  if (agyProcesses().length) throw new Error("请先退出所有 agy 窗口再回滚。");
+  if (activeAgyForConversations([job.targetConversationId]).length) throw new Error("目标对话仍在运行，请先关闭后再回滚。");
   const targetDb = path.join(AGY_ROOT, "conversations", `${job.targetConversationId}.db`);
   if (!fs.existsSync(job.backups.database)) throw new Error("数据库备份已不存在。");
   fs.copyFileSync(job.backups.database, targetDb);
@@ -1212,6 +1293,19 @@ async function api(req, res, url) {
     launchConversation(branch.conversationId, room.workspace);
     return sendJson(res, 200, { ok: true, label: branch.label, conversationId: branch.conversationId });
   }
+  const cloneBranchMatch = url.pathname.match(/^\/api\/rooms\/([0-9a-f-]+)\/branches\/([0-9a-f-]+)\/clone$/i);
+  if (cloneBranchMatch) {
+    const room = roomById(cloneBranchMatch[1]);
+    if (!room) return sendJson(res, 404, { error: "找不到这个并行房间" });
+    if (room.state !== "ready") return sendJson(res, 409, { error: "只有正在使用且空闲的房间可以复制分支" });
+    if ((room.branches?.length || 0) >= 6) return sendJson(res, 409, { error: "一个房间最多保留 6 个窗口" });
+    if (operationRunning()) return sendJson(res, 409, { error: "已有一个接力或房间操作正在进行" });
+    const sourceBranch = room.branches?.find((item) => item.conversationId.toLowerCase() === cloneBranchMatch[2].toLowerCase());
+    if (!sourceBranch) return sendJson(res, 404, { error: "这个窗口不属于当前房间" });
+    updateRoom(room, { state: "branching", error: null });
+    performBranchClone(room, sourceBranch);
+    return sendJson(res, 202, publicRoom(room, queryConversations(100)));
+  }
   const handoffRoomMatch = url.pathname.match(/^\/api\/rooms\/([0-9a-f-]+)\/handoff$/i);
   if (handoffRoomMatch) {
     const sourceRoom = roomById(handoffRoomMatch[1]);
@@ -1276,7 +1370,9 @@ async function api(req, res, url) {
     const room = roomById(mergeRoomMatch[1]);
     if (!room) return sendJson(res, 404, { error: "找不到这个并行房间" });
     if (!body.targetAccountId) return sendJson(res, 400, { error: "请选择汇合后的账号" });
-    if (!room.branches?.some((branch) => branch.conversationId === body.primaryBranchId)) return sendJson(res, 400, { error: "请选择一条完整主干窗口" });
+    const primaryBranch = room.branches?.find((branch) => branch.conversationId === body.primaryBranchId);
+    if (!primaryBranch) return sendJson(res, 400, { error: "请选择一条完整主干窗口" });
+    if (primaryBranch.clonedFromLabel) return sendJson(res, 400, { error: `窗口 ${primaryBranch.label} 是从 ${primaryBranch.clonedFromLabel} 复制的增量分支，请选择原始 A/B/C 作为完整主干` });
     if (!["ready", "merge_failed", "merge_failed_rolled_back"].includes(room.state)) return sendJson(res, 409, { error: "这个房间当前不能开始汇合" });
     if (operationRunning()) return sendJson(res, 409, { error: "已有一个接力或房间操作正在进行" });
     const hasDelta = DEMO || room.branches.some((branch) => {

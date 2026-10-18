@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.4.0
+
+- Clone any stopped window into a new independent branch inside the same room, up to six branches.
+- Preserve exact conversation rows, brain data, account binding, and the source branch unchanged.
+- Keep the new branch closed after verification so it does not consume memory until explicitly opened.
+- Track branch lineage and count future changes from the clone point rather than the original room split.
+- Keep cloned branches out of the complete-trunk selector so later semantic merges do not duplicate inherited history.
+- Allow unrelated sibling windows to keep running when the source branch and account state are safe.
+
 ## 2.3.1
 
 - Add an independent Open button to every branch in the current room.
