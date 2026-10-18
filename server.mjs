@@ -796,12 +796,21 @@ async function performRoomFork(room) {
   }
 }
 
+function nextCloneLabel(room, sourceBranch) {
+  const family = String(sourceBranch.clonedFromLabel || sourceBranch.label || "X").match(/^([A-Z])/i)?.[1]?.toUpperCase() || "X";
+  const used = new Set((room.branches || []).map((branch) => branch.label));
+  for (let index = 1; index <= 99; index += 1) {
+    const candidate = `${family}${index}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  throw new Error(`窗口 ${family} 的分支编号已经用完。`);
+}
+
 async function performBranchClone(room, sourceBranch) {
   let target = null;
   try {
     if (DEMO) {
-      const used = new Set(room.branches.map((branch) => branch.label));
-      const label = ["A", "B", "C", "D", "E", "F"].find((candidate) => !used.has(candidate));
+      const label = nextCloneLabel(room, sourceBranch);
       room.branches.push({
         label,
         conversationId: crypto.randomUUID(),
@@ -825,9 +834,7 @@ async function performBranchClone(room, sourceBranch) {
       await switchToAccount(room.accountId);
       addRoomStep(room, "恢复房间账号", "done", "已切回这个房间使用的账号");
     }
-    const used = new Set(room.branches.map((branch) => branch.label));
-    const label = ["A", "B", "C", "D", "E", "F"].find((candidate) => !used.has(candidate));
-    if (!label) throw new Error("一个房间最多保留 6 个窗口。");
+    const label = nextCloneLabel(room, sourceBranch);
     const sourceStats = conversationDbStats(sourceBranch.conversationId);
     const workspace = room.workspace && fs.existsSync(room.workspace) ? room.workspace : HOME;
     addRoomStep(room, `复制窗口 ${sourceBranch.label} → ${label}`, "running", "正在创建独立对话与账号绑定");

@@ -84,7 +84,7 @@ test("demo mode hands off a whole room, verifies it, and can still merge later",
   room = await (await fetch(`${base}/api/rooms/${room.id}`)).json();
   assert.equal(room.state, "ready");
   assert.equal(room.branches.length, 4);
-  assert.equal(room.branches[3].label, "D");
+  assert.equal(room.branches[3].label, "A1");
   assert.equal(room.branches[3].clonedFromLabel, "A");
 
   lifecycleResponse = await post(`/api/rooms/${sourceRoomId}/cleanup-handoff`, {});

@@ -128,6 +128,7 @@ test("a stopped branch can be cloned into the same room with safe merge lineage"
   const server = fs.readFileSync(path.join(root, "server.mjs"), "utf8");
   const app = fs.readFileSync(path.join(root, "dist/app.js"), "utf8");
   assert.match(server, /performBranchClone/);
+  assert.match(server, /nextCloneLabel/);
   assert.match(server, /clonedFromLabel/);
   assert.match(server, /一个房间最多保留 6 个窗口/);
   assert.match(server, /复制的增量分支/);

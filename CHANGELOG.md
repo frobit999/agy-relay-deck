@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.4.1
+
+- Name cloned branches by their source family: A→A1/A2 and B→B1/B2.
+- Keep descendants in the same family while still recording the immediate parent branch.
+
 ## 2.4.0
 
 - Clone any stopped window into a new independent branch inside the same room, up to six branches.
