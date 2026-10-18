@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.5.0
+
+- Retire an individual stopped branch from the active room into a dedicated macOS Trash archive.
+- Keep a per-branch restore manifest and expose recovery until the Trash is emptied.
+- Exclude retired branches from room handoff, merge, process launch, and the six-window active limit.
+- Block retirement of a running branch, the final active branch, or a branch with active descendants.
+- Keep retirement and recovery explicit, per-window, and confirmation-gated in the current-room card.
+
 ## 2.4.1
 
 - Name cloned branches by their source family: A→A1/A2 and B→B1/B2.

@@ -427,6 +427,17 @@ function publicRoom(room, conversations = []) {
   });
   const recommended = branchViews.filter((branch) => !branch.clonedFromLabel).sort((a, b) => (b.addedSteps ?? -1) - (a.addedSteps ?? -1))[0]?.conversationId || null;
   const cleanupManifest = room.cleanupManifest ? jsonFile(room.cleanupManifest, null) : null;
+  const retiredBranches = (room.retiredBranches || []).map((branch) => {
+    const manifest = branch.cleanupManifest ? jsonFile(branch.cleanupManifest, null) : null;
+    return {
+      label: branch.label,
+      conversationId: branch.conversationId,
+      clonedFromLabel: branch.clonedFromLabel || null,
+      retiredAt: branch.retiredAt,
+      logicalBytes: branch.logicalBytes || 0,
+      canRestore: Boolean(manifest?.moves?.some((move) => fs.existsSync(move.trash))),
+    };
+  });
   return {
     id: room.id,
     state: room.state,
@@ -451,6 +462,7 @@ function publicRoom(room, conversations = []) {
     cleanupAt: room.cleanupAt || null,
     canRestore: Boolean(cleanupManifest?.moves?.some((move) => fs.existsSync(move.trash))),
     branches: branchViews,
+    retiredBranches,
   };
 }
 
@@ -531,6 +543,103 @@ function restoreRoomBranches(room, nextState = "verified") {
     throw error;
   }
   updateRoom(room, { state: nextState, restoredAt: new Date().toISOString(), error: null });
+}
+
+function branchHasActiveDescendants(room, label) {
+  const descendants = new Set([label]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const branch of room.branches || []) {
+      if (branch.clonedFromLabel && descendants.has(branch.clonedFromLabel) && !descendants.has(branch.label)) {
+        descendants.add(branch.label);
+        changed = true;
+      }
+    }
+  }
+  descendants.delete(label);
+  return descendants.size > 0;
+}
+
+function retireRoomBranch(room, branch) {
+  if (!UUID_RE.test(room.id) || !UUID_RE.test(branch.conversationId)) throw new Error("房间或窗口编号不合法。");
+  if ((room.branches || []).length <= 1) throw new Error("房间至少要保留一个活跃窗口。");
+  if (activeAgyForConversations([branch.conversationId]).length) throw new Error(`窗口 ${branch.label} 仍在运行，请先关闭它。`);
+  if (branchHasActiveDescendants(room, branch.label)) throw new Error(`窗口 ${branch.label} 仍有活跃子分支，请先处理子分支，避免破坏记忆链。`);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const trashRoot = path.join(HOME, ".Trash", "Agy Relay Deck", "retired-branches", `${stamp}-${room.id}-${branch.label}`);
+  fs.mkdirSync(trashRoot, { recursive: true, mode: 0o700 });
+  const conversation = queryConversations(200).find((item) => item.id === branch.conversationId);
+  const moves = [];
+  try {
+    const id = branch.conversationId;
+    const groups = [
+      [path.join(AGY_ROOT, "conversations"), (name) => name === `${id}.db` || name.startsWith(`${id}.db.`) || name === `${id}.db-wal` || name === `${id}.db-shm`],
+      [path.join(AGY_ROOT, "brain"), (name) => name === id || name.startsWith(`${id}.before-transplant-`)],
+      [path.join(AGY_ROOT, "annotations"), (name) => name === `${id}.pbtxt` || name.startsWith(`${id}.pbtxt.before-transplant-`)],
+    ];
+    for (const [directory, matches] of groups) {
+      for (const name of fs.existsSync(directory) ? fs.readdirSync(directory) : []) {
+        if (!matches(name)) continue;
+        const source = path.join(directory, name);
+        const destinationDir = path.join(trashRoot, path.basename(directory));
+        fs.mkdirSync(destinationDir, { recursive: true, mode: 0o700 });
+        const trash = path.join(destinationDir, name);
+        if (fs.existsSync(trash)) throw new Error(`废纸篓目标已存在：${name}`);
+        fs.renameSync(source, trash);
+        moves.push({ source, trash });
+      }
+    }
+    if (!moves.length) throw new Error(`窗口 ${branch.label} 的本地文件已经不存在。`);
+  } catch (error) {
+    for (const move of [...moves].reverse()) {
+      if (fs.existsSync(move.trash) && !fs.existsSync(move.source)) {
+        fs.mkdirSync(path.dirname(move.source), { recursive: true });
+        fs.renameSync(move.trash, move.source);
+      }
+    }
+    throw error;
+  }
+  const manifestFile = path.join(STATE_ROOT, "retired-branches", `${room.id}-${branch.label}-${stamp}.json`);
+  const retiredAt = new Date().toISOString();
+  const manifest = { roomId: room.id, branchLabel: branch.label, conversationId: branch.conversationId, createdAt: retiredAt, trashRoot, logicalBytes: conversation?.totalLocalBytes || 0, moves };
+  writeJsonAtomic(manifestFile, manifest);
+  fs.writeFileSync(path.join(trashRoot, "restore-manifest.json"), JSON.stringify(manifest, null, 2), { mode: 0o600 });
+  room.branches = room.branches.filter((item) => item.conversationId !== branch.conversationId);
+  room.retiredBranches = [...(room.retiredBranches || []), { ...branch, retiredAt, cleanupManifest: manifestFile, logicalBytes: manifest.logicalBytes }];
+  updateRoom(room, { branchCount: room.branches.length, error: null });
+  return manifest;
+}
+
+function restoreRetiredBranch(room, label) {
+  if ((room.branches || []).length >= 6) throw new Error("当前房间已经有 6 个活跃窗口，不能恢复更多。");
+  const retired = (room.retiredBranches || []).find((branch) => branch.label === label);
+  if (!retired) throw new Error("找不到这个已退役窗口。");
+  if ((room.branches || []).some((branch) => branch.label === label || branch.conversationId === retired.conversationId)) throw new Error("活跃房间已经存在同名窗口。");
+  const manifest = jsonFile(retired.cleanupManifest, null);
+  if (!manifest?.moves?.length) throw new Error("没有可用的恢复清单，可能已经清空废纸篓。");
+  for (const move of manifest.moves) {
+    if (!fs.existsSync(move.trash)) throw new Error(`废纸篓中的文件已不存在：${path.basename(move.trash)}`);
+    if (fs.existsSync(move.source)) throw new Error(`原位置已经存在同名文件：${path.basename(move.source)}`);
+  }
+  const restored = [];
+  try {
+    for (const move of manifest.moves) {
+      fs.mkdirSync(path.dirname(move.source), { recursive: true });
+      fs.renameSync(move.trash, move.source);
+      restored.push(move);
+    }
+  } catch (error) {
+    for (const move of [...restored].reverse()) {
+      if (fs.existsSync(move.source) && !fs.existsSync(move.trash)) fs.renameSync(move.source, move.trash);
+    }
+    throw error;
+  }
+  const { retiredAt, cleanupManifest, logicalBytes, ...branch } = retired;
+  room.retiredBranches = room.retiredBranches.filter((item) => item.label !== label);
+  room.branches = [...room.branches, branch].sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
+  updateRoom(room, { branchCount: room.branches.length, error: null });
+  return branch;
 }
 
 function operationRunning() {
@@ -1312,6 +1421,40 @@ async function api(req, res, url) {
     updateRoom(room, { state: "branching", error: null });
     performBranchClone(room, sourceBranch);
     return sendJson(res, 202, publicRoom(room, queryConversations(100)));
+  }
+  const retireBranchMatch = url.pathname.match(/^\/api\/rooms\/([0-9a-f-]+)\/branches\/([0-9a-f-]+)\/retire$/i);
+  if (retireBranchMatch) {
+    const room = roomById(retireBranchMatch[1]);
+    if (!room) return sendJson(res, 404, { error: "找不到这个并行房间" });
+    if (room.state !== "ready") return sendJson(res, 409, { error: "只有正在使用且空闲的房间可以退役窗口" });
+    if (operationRunning()) return sendJson(res, 409, { error: "已有一个接力或房间操作正在进行" });
+    const branch = room.branches?.find((item) => item.conversationId.toLowerCase() === retireBranchMatch[2].toLowerCase());
+    if (!branch) return sendJson(res, 404, { error: "这个窗口不属于当前房间" });
+    if ((room.branches?.length || 0) <= 1) return sendJson(res, 409, { error: "房间至少要保留一个活跃窗口" });
+    if (branchHasActiveDescendants(room, branch.label)) return sendJson(res, 409, { error: `窗口 ${branch.label} 仍有活跃子分支，请先处理子分支` });
+    if (DEMO) {
+      room.branches = room.branches.filter((item) => item.conversationId !== branch.conversationId);
+      room.retiredBranches = [...(room.retiredBranches || []), { ...branch, retiredAt: new Date().toISOString(), cleanupManifest: null, logicalBytes: 0 }];
+      updateRoom(room, { branchCount: room.branches.length, error: null });
+    } else retireRoomBranch(room, branch);
+    return sendJson(res, 200, publicRoom(room, queryConversations(100)));
+  }
+  const restoreRetiredMatch = url.pathname.match(/^\/api\/rooms\/([0-9a-f-]+)\/retired\/([A-Z][A-Z0-9-]*)\/restore$/i);
+  if (restoreRetiredMatch) {
+    const room = roomById(restoreRetiredMatch[1]);
+    if (!room) return sendJson(res, 404, { error: "找不到这个并行房间" });
+    if (room.state !== "ready") return sendJson(res, 409, { error: "当前房间正在执行其他操作，暂不能恢复窗口" });
+    if (operationRunning()) return sendJson(res, 409, { error: "已有一个接力或房间操作正在进行" });
+    const label = restoreRetiredMatch[2].toUpperCase();
+    if (DEMO) {
+      const retired = room.retiredBranches?.find((branch) => branch.label.toUpperCase() === label);
+      if (!retired) return sendJson(res, 404, { error: "找不到这个已退役窗口" });
+      const { retiredAt, cleanupManifest, logicalBytes, ...branch } = retired;
+      room.retiredBranches = room.retiredBranches.filter((item) => item.label.toUpperCase() !== label);
+      room.branches = [...room.branches, branch].sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
+      updateRoom(room, { branchCount: room.branches.length, error: null });
+    } else restoreRetiredBranch(room, label);
+    return sendJson(res, 200, publicRoom(room, queryConversations(100)));
   }
   const handoffRoomMatch = url.pathname.match(/^\/api\/rooms\/([0-9a-f-]+)\/handoff$/i);
   if (handoffRoomMatch) {

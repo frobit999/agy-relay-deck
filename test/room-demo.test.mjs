@@ -87,6 +87,19 @@ test("demo mode hands off a whole room, verifies it, and can still merge later",
   assert.equal(room.branches[3].label, "A1");
   assert.equal(room.branches[3].clonedFromLabel, "A");
 
+  const branchB = room.branches.find((branch) => branch.label === "B");
+  let retireResponse = await post(`/api/rooms/${room.id}/branches/${branchB.conversationId}/retire`, {});
+  assert.equal(retireResponse.status, 200);
+  room = await retireResponse.json();
+  assert.equal(room.branches.some((branch) => branch.label === "B"), false);
+  assert.equal(room.retiredBranches.some((branch) => branch.label === "B"), true);
+
+  retireResponse = await post(`/api/rooms/${room.id}/retired/B/restore`, {});
+  assert.equal(retireResponse.status, 200);
+  room = await retireResponse.json();
+  assert.equal(room.branches.some((branch) => branch.label === "B"), true);
+  assert.equal(room.retiredBranches.length, 0);
+
   lifecycleResponse = await post(`/api/rooms/${sourceRoomId}/cleanup-handoff`, {});
   assert.equal(lifecycleResponse.status, 200);
   sourceRoom = await lifecycleResponse.json();

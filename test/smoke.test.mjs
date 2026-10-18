@@ -135,3 +135,16 @@ test("a stopped branch can be cloned into the same room with safe merge lineage"
   assert.match(app, /data-action="clone-branch"/);
   assert.match(app, /关闭后复制/);
 });
+
+test("individual branches retire to Trash with a reversible room manifest", () => {
+  const server = fs.readFileSync(path.join(root, "server.mjs"), "utf8");
+  const app = fs.readFileSync(path.join(root, "dist/app.js"), "utf8");
+  assert.match(server, /retireRoomBranch/);
+  assert.match(server, /restoreRetiredBranch/);
+  assert.match(server, /retiredBranches/);
+  assert.match(server, /branchHasActiveDescendants/);
+  assert.match(server, /retired-branches/);
+  assert.match(app, /data-action="retire-branch"/);
+  assert.match(app, /data-action="restore-branch"/);
+  assert.match(app, /清空废纸篓前可以恢复/);
+});
