@@ -200,26 +200,30 @@ function fileBytes(file) {
   try { return fs.statSync(file).size; } catch { return 0; }
 }
 
-function attachConversationSizes(conversations) {
+function attachConversationSizes(conversations, priorityIds = []) {
   if (DEMO) return conversations;
   const now = Date.now();
   const stale = conversations.filter((item) => {
     const cached = conversationSizeCache.get(item.id);
     return !cached || now - cached.checkedAt > SIZE_CACHE_TTL_MS;
   });
-  if (stale.length) {
+  const priority = new Set(priorityIds);
+  const targets = priority.size ? stale.filter((item) => priority.has(item.id)) : stale.slice(0, 6);
+  if (targets.length) {
     const du = findExecutable(["/usr/bin/du", "/bin/du"]);
-    const brainPaths = stale.map((item) => path.join(AGY_ROOT, "brain", item.id));
+    const brainPaths = targets.map((item) => path.join(AGY_ROOT, "brain", item.id));
     const measured = new Map();
     if (du) {
-      const result = spawnSync(du, ["-sk", ...brainPaths], { encoding: "utf8", timeout: 20_000 });
+      const result = spawnSync(du, ["-sk", ...brainPaths], { encoding: "utf8", timeout: 30_000 });
       for (const line of result.stdout.split(/\r?\n/)) {
         const match = line.match(/^\s*(\d+)\s+(.+)$/);
         if (match) measured.set(path.basename(match[2]), Number(match[1]) * 1024);
       }
     }
-    for (const item of stale) {
-      conversationSizeCache.set(item.id, { checkedAt: now, brainBytes: measured.get(item.id) || 0 });
+    for (const item of targets) {
+      if (measured.has(item.id) || !fs.existsSync(path.join(AGY_ROOT, "brain", item.id))) {
+        conversationSizeCache.set(item.id, { checkedAt: now, brainBytes: measured.get(item.id) || 0 });
+      }
     }
   }
   return conversations.map((item) => {
@@ -234,7 +238,7 @@ function attachConversationSizes(conversations) {
   });
 }
 
-function queryConversations(limit = 30) {
+function queryConversations(limit = 30, priorityIds = []) {
   if (DEMO) return demoConversations();
   const db = path.join(AGY_ROOT, "conversation_summaries.db");
   const sqlite = findExecutable(["/usr/bin/sqlite3", "/opt/homebrew/bin/sqlite3", "/usr/local/bin/sqlite3"]);
@@ -268,7 +272,7 @@ function queryConversations(limit = 30) {
       workspace: safeParseWorkspace(row.workspace_uris),
       status: row.status || "",
       projectId: row.project_id || "",
-    })).filter((item) => fs.existsSync(path.join(AGY_ROOT, "conversations", `${item.id}.db`))));
+    })).filter((item) => fs.existsSync(path.join(AGY_ROOT, "conversations", `${item.id}.db`))), priorityIds);
   } catch { return scanConversations(limit); }
 }
 
@@ -411,7 +415,15 @@ function publicRoom(room, conversations = []) {
   const rooms = loadRooms();
   const branchViews = (room.branches || []).map((branch) => {
     const live = byId.get(branch.conversationId);
-    const currentSteps = live?.stepCount ?? null;
+    const reportedSteps = live?.stepCount ?? null;
+    const baselineSteps = Number.isFinite(Number(branch.baselineStepCount)) ? Number(branch.baselineStepCount) : null;
+    const currentSteps = typeof reportedSteps === "number" && baselineSteps !== null
+      ? Math.max(reportedSteps, baselineSteps)
+      : reportedSteps ?? baselineSteps;
+    const parent = branch.clonedFromLabel ? (room.branches || []).find((item) => item.label === branch.clonedFromLabel) : null;
+    const parentBytes = parent ? byId.get(parent.conversationId)?.totalLocalBytes : null;
+    const summaryPending = typeof reportedSteps === "number" && baselineSteps !== null && reportedSteps < baselineSteps;
+    const currentBytes = summaryPending && parentBytes ? parentBytes : live?.totalLocalBytes ?? null;
     return {
       label: branch.label,
       conversationId: branch.conversationId,
@@ -419,7 +431,8 @@ function publicRoom(room, conversations = []) {
       createdAt: branch.createdAt,
       baselineStepCount: branch.baselineStepCount,
       currentStepCount: currentSteps,
-      currentBytes: live?.totalLocalBytes ?? null,
+      currentBytes,
+      summaryPending,
       addedSteps: typeof currentSteps === "number" && typeof branch.baselineStepCount === "number"
         ? Math.max(0, currentSteps - branch.baselineStepCount)
         : null,
@@ -853,6 +866,7 @@ async function transplantConversation(sourceId, targetId, title) {
   if (report?.verification?.destination_integrity !== "ok" || !report?.verification?.row_counts_match || !report?.verification?.binding_tables_unchanged) {
     throw new Error("完整性验证未通过，目标对话没有进入可用状态。");
   }
+  conversationSizeCache.delete(targetId);
   return report;
 }
 
@@ -1289,7 +1303,11 @@ function launchConversation(conversationId, workspace) {
 async function statusPayload() {
   const online = DEMO ? true : await managerOnline();
   const rooms = loadRooms();
-  const conversations = queryConversations(60).map((item) => ({ ...item, relay: sourceEligibility(item.id, rooms) }));
+  const priorityRoom = [...rooms]
+    .filter((room) => ["creating", "branching", "ready", "handoff_creating", "handoff_pending_verification", "merging", "merged", "merged_pending_verification"].includes(room.state))
+    .sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))[0];
+  const priorityIds = (priorityRoom?.branches || []).map((branch) => branch.conversationId);
+  const conversations = queryConversations(60, priorityIds).map((item) => ({ ...item, relay: sourceEligibility(item.id, rooms) }));
   const runningAgy = DEMO ? [] : agyProcessDetails();
   return {
     demo: DEMO,

@@ -86,6 +86,7 @@ test("demo mode hands off a whole room, verifies it, and can still merge later",
   assert.equal(room.branches.length, 4);
   assert.equal(room.branches[3].label, "A1");
   assert.equal(room.branches[3].clonedFromLabel, "A");
+  assert.equal(room.branches[3].currentStepCount, 22872);
 
   const branchB = room.branches.find((branch) => branch.label === "B");
   let retireResponse = await post(`/api/rooms/${room.id}/branches/${branchB.conversationId}/retire`, {});

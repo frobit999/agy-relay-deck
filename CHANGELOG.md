@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.5.1
+
+- Prevent a newly cloned branch from briefly showing the two-step placeholder count after transplant verification.
+- Floor displayed branch steps at the verified clone baseline while the Antigravity summary database catches up.
+- Invalidate the target size cache after transplant and prioritize active-room Brain measurements.
+- Use the parent branch size as a temporary display fallback for a verified clone with stale summary metadata.
+
 ## 2.5.0
 
 - Retire an individual stopped branch from the active room into a dedicated macOS Trash archive.

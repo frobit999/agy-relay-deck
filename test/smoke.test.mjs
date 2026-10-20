@@ -148,3 +148,13 @@ test("individual branches retire to Trash with a reversible room manifest", () =
   assert.match(app, /data-action="restore-branch"/);
   assert.match(app, /清空废纸篓前可以恢复/);
 });
+
+test("verified clone metadata overrides a stale two-step summary", () => {
+  const server = fs.readFileSync(path.join(root, "server.mjs"), "utf8");
+  const app = fs.readFileSync(path.join(root, "dist/app.js"), "utf8");
+  assert.match(server, /Math\.max\(reportedSteps, baselineSteps\)/);
+  assert.match(server, /conversationSizeCache\.delete\(targetId\)/);
+  assert.match(server, /summaryPending/);
+  assert.match(server, /priorityIds/);
+  assert.match(app, /复制已验证/);
+});
