@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.0.0
+
+- Add Windows 11 support for executable discovery, process inspection, terminal launch, browser launch, and recovery storage.
+- Fall back to a bundled Python stdlib bridge when Windows does not provide sqlite3 or du command-line tools.
+- Add `start-windows.cmd` and a complete Mac-to-Windows migration kit with final sync, restore, verification, and room-account rebinding scripts.
+- Keep OAuth tokens, Antigravity Tools account tokens, installation IDs, logs, caches, and Mac binaries out of migration exports.
+- Preserve the existing macOS behavior and continue listening only on `127.0.0.1`.
+
 ## 2.5.1
 
 - Prevent a newly cloned branch from briefly showing the two-step placeholder count after transplant verification.

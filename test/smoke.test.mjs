@@ -7,9 +7,38 @@ import { fileURLToPath } from "node:url";
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 test("required dashboard files exist", () => {
-  for (const file of ["server.mjs", "dist/index.html", "dist/styles.css", "dist/app.js", "tools/agy_cli_transplant.py", "start.command"]) {
+  for (const file of ["server.mjs", "dist/index.html", "dist/styles.css", "dist/app.js", "tools/agy_cli_transplant.py", "tools/sqlite_bridge.py", "start.command", "start-windows.cmd"]) {
     assert.equal(fs.existsSync(path.join(root, file)), true, file);
   }
+});
+
+test("Windows uses native process, terminal, Python and recovery fallbacks", () => {
+  const server = fs.readFileSync(path.join(root, "server.mjs"), "utf8");
+  const launcher = fs.readFileSync(path.join(root, "start-windows.cmd"), "utf8");
+  assert.match(server, /const IS_WINDOWS = process\.platform === "win32"/);
+  assert.match(server, /Get-CimInstance Win32_Process/);
+  assert.match(server, /process\.env\.ComSpec \|\| "cmd\.exe"/);
+  assert.match(server, /function pythonRuntime/);
+  assert.match(server, /SQLITE_BRIDGE/);
+  assert.match(server, /"recovery-bin"/);
+  assert.match(launcher, /node server\.mjs/);
+});
+
+test("Windows migration kit excludes credentials and verifies restored conversations", () => {
+  const finalSync = fs.readFileSync(path.join(root, "migration/windows/Final-Sync-Mac.command"), "utf8");
+  const archive = fs.readFileSync(path.join(root, "migration/windows/Create-Transfer-Archive-Mac.command"), "utf8");
+  const restore = fs.readFileSync(path.join(root, "migration/windows/Restore-Windows.ps1"), "utf8");
+  const rebind = fs.readFileSync(path.join(root, "migration/windows/Rebind-Rooms-To-Current-Account.ps1"), "utf8");
+  const verify = fs.readFileSync(path.join(root, "migration/windows/scripts/verify_windows.py"), "utf8");
+  assert.match(finalSync, /antigravity-oauth-token/);
+  assert.match(finalSync, /pgrep -x agy/);
+  assert.match(finalSync, /conversation_summaries\.db/);
+  assert.match(archive, /FINAL-SNAPSHOT-COMPLETE\.txt/);
+  assert.match(archive, /tar -cf/);
+  assert.match(restore, /AgyMigrationBackup/);
+  assert.match(restore, /robocopy/);
+  assert.match(rebind, /current_account_id/);
+  assert.match(verify, /PRAGMA integrity_check/);
 });
 
 test("server is local-only and frontend has no remote assets", () => {
@@ -146,7 +175,7 @@ test("individual branches retire to Trash with a reversible room manifest", () =
   assert.match(server, /retired-branches/);
   assert.match(app, /data-action="retire-branch"/);
   assert.match(app, /data-action="restore-branch"/);
-  assert.match(app, /清空废纸篓前可以恢复/);
+  assert.match(app, /清空恢复区前可以恢复/);
 });
 
 test("verified clone metadata overrides a stale two-step summary", () => {

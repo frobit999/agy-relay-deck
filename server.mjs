@@ -19,8 +19,11 @@ const HISTORY_FILE = path.join(STATE_ROOT, "history.json");
 const ROOMS_FILE = path.join(STATE_ROOT, "rooms.json");
 const SETTINGS_FILE = path.join(STATE_ROOT, "settings.json");
 const TRANSPLANTER = path.join(__dirname, "tools", "agy_cli_transplant.py");
+const SQLITE_BRIDGE = path.join(__dirname, "tools", "sqlite_bridge.py");
 const DIST = path.join(__dirname, "dist");
 const DEMO = process.env.PANEL_DEMO === "1";
+const IS_WINDOWS = process.platform === "win32";
+const IS_MAC = process.platform === "darwin";
 const jobs = new Map();
 const roomJobs = new Map();
 const conversationSizeCache = new Map();
@@ -62,7 +65,12 @@ function findExecutable(candidates) {
   for (const candidate of candidates) {
     if (!candidate) continue;
     const resolved = candidate.startsWith("~") ? path.join(HOME, candidate.slice(2)) : candidate;
-    try { fs.accessSync(resolved, fs.constants.X_OK); return resolved; } catch { /* keep looking */ }
+    const hasDirectory = resolved.includes("/") || resolved.includes("\\");
+    const extensions = IS_WINDOWS ? ["", ...(process.env.PATHEXT || ".EXE;.CMD;.BAT").split(";")] : [""];
+    const paths = hasDirectory ? [resolved] : (process.env.PATH || "").split(path.delimiter).flatMap((directory) => extensions.map((extension) => path.join(directory, `${resolved}${extension}`)));
+    for (const executable of paths) {
+      try { fs.accessSync(executable, fs.constants.X_OK); return executable; } catch { /* keep looking */ }
+    }
   }
   return null;
 }
@@ -70,6 +78,9 @@ function findExecutable(candidates) {
 function agyBinary() {
   return findExecutable([
     process.env.AGY_BIN,
+    "agy",
+    IS_WINDOWS && path.join(process.env.LOCALAPPDATA || "", "agy", "bin", "agy.exe"),
+    IS_WINDOWS && path.join(process.env.USERPROFILE || HOME, ".local", "bin", "agy.exe"),
     "/opt/homebrew/bin/agy",
     "/usr/local/bin/agy",
     path.join(HOME, ".local", "bin", "agy"),
@@ -79,6 +90,10 @@ function agyBinary() {
 function managerBinary() {
   const known = findExecutable([
     process.env.ANTIGRAVITY_TOOLS_BIN,
+    "antigravity-tools",
+    IS_WINDOWS && path.join(process.env.LOCALAPPDATA || "", "Programs", "Antigravity Tools", "antigravity-tools.exe"),
+    IS_WINDOWS && path.join(process.env.LOCALAPPDATA || "", "Antigravity Tools", "antigravity-tools.exe"),
+    IS_WINDOWS && path.join(process.env.ProgramFiles || "", "Antigravity Tools", "antigravity-tools.exe"),
     "/Applications/Antigravity Tools.app/Contents/MacOS/antigravity-tools",
     path.join(HOME, "Applications", "Antigravity Tools.app", "Contents", "MacOS", "antigravity-tools"),
     path.join(HOME, "Downloads", "Antigravity Tools.app", "Contents", "MacOS", "antigravity-tools"),
@@ -99,6 +114,24 @@ function managerBinary() {
     } catch { /* optional discovery location */ }
   }
   return findExecutable(discovered);
+}
+
+function pythonRuntime() {
+  const direct = findExecutable([
+    process.env.PYTHON_BIN,
+    "python3",
+    "python",
+    !IS_WINDOWS && "/usr/bin/python3",
+  ]);
+  if (direct) return { command: direct, prefix: [] };
+  const launcher = IS_WINDOWS ? findExecutable(["py.exe", "py"]) : null;
+  return launcher ? { command: launcher, prefix: ["-3"] } : null;
+}
+
+function runPythonSync(args, options = {}) {
+  const runtime = pythonRuntime();
+  if (!runtime) return { status: 1, stdout: "", stderr: "Python 3 not found" };
+  return spawnSync(runtime.command, [...runtime.prefix, ...args], { encoding: "utf8", timeout: options.timeout || 20_000, ...options });
 }
 
 function managerConfig() {
@@ -219,6 +252,12 @@ function attachConversationSizes(conversations, priorityIds = []) {
         const match = line.match(/^\s*(\d+)\s+(.+)$/);
         if (match) measured.set(path.basename(match[2]), Number(match[1]) * 1024);
       }
+    } else if (pythonRuntime()) {
+      const result = runPythonSync([SQLITE_BRIDGE, "dirsize", ...brainPaths], { timeout: 30_000 });
+      try {
+        const sizes = JSON.parse(result.stdout || "{}");
+        for (const [id, bytes] of Object.entries(sizes)) measured.set(id, Number(bytes) || 0);
+      } catch { /* retry on a later refresh */ }
     }
     for (const item of targets) {
       if (measured.has(item.id) || !fs.existsSync(path.join(AGY_ROOT, "brain", item.id))) {
@@ -242,8 +281,9 @@ function queryConversations(limit = 30, priorityIds = []) {
   if (DEMO) return demoConversations();
   const db = path.join(AGY_ROOT, "conversation_summaries.db");
   const sqlite = findExecutable(["/usr/bin/sqlite3", "/opt/homebrew/bin/sqlite3", "/usr/local/bin/sqlite3"]);
-  if (!sqlite || !fs.existsSync(db)) return scanConversations(limit);
-  const sql = `SELECT conversation_id,title,preview,step_count,last_modified_time,workspace_uris,status,project_id FROM conversation_summaries ORDER BY last_modified_time DESC LIMIT ${Math.min(100, Math.max(1, limit))};`;
+  if (!fs.existsSync(db) || (!sqlite && !pythonRuntime())) return scanConversations(limit);
+  const boundedLimit = Math.min(100, Math.max(1, limit));
+  const sql = `SELECT conversation_id,title,preview,step_count,last_modified_time,workspace_uris,status,project_id FROM conversation_summaries ORDER BY last_modified_time DESC LIMIT ${boundedLimit};`;
   // Query a disposable snapshot. SQLite can create lock/SHM files even for a
   // read; keeping those out of the live agy directory makes the picker work
   // reliably while the CLI or a sandbox is active.
@@ -255,7 +295,9 @@ function queryConversations(limit = 30, priorityIds = []) {
     for (const suffix of ["-wal", "-shm"]) {
       if (fs.existsSync(`${db}${suffix}`)) fs.copyFileSync(`${db}${suffix}`, `${snapshotDb}${suffix}`);
     }
-    result = spawnSync(sqlite, ["-json", snapshotDb, sql], { encoding: "utf8", timeout: 5000 });
+    result = sqlite
+      ? spawnSync(sqlite, ["-json", snapshotDb, sql], { encoding: "utf8", timeout: 5000 })
+      : runPythonSync([SQLITE_BRIDGE, "summary", snapshotDb, String(boundedLimit)], { timeout: 5000 });
   } catch {
     return scanConversations(limit);
   } finally {
@@ -303,12 +345,29 @@ function demoConversations() {
 }
 
 function agyProcesses() {
+  if (IS_WINDOWS) return agyProcessDetails().map((process) => process.pid);
   const result = spawnSync("/usr/bin/pgrep", ["-x", "agy"], { encoding: "utf8" });
   if (result.status !== 0) return [];
   return result.stdout.trim().split(/\s+/).filter(Boolean).map(Number);
 }
 
 function agyProcessDetails() {
+  if (IS_WINDOWS) {
+    const powershell = findExecutable(["powershell.exe", "pwsh.exe", "powershell", "pwsh"]);
+    if (!powershell) return [];
+    const script = "$ErrorActionPreference='SilentlyContinue'; @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'agy.exe' } | Select-Object ProcessId,CommandLine) | ConvertTo-Json -Compress";
+    const result = spawnSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", timeout: 5000, windowsHide: true });
+    if (result.status !== 0 || !result.stdout.trim()) return [];
+    try {
+      const parsed = JSON.parse(result.stdout);
+      const rows = Array.isArray(parsed) ? parsed : [parsed];
+      return rows.map((row) => {
+        const command = row.CommandLine || "agy.exe";
+        const conversation = command.match(/--conversation\s+["']?([0-9a-f-]{36})["']?/i)?.[1]?.toLowerCase() || null;
+        return { pid: Number(row.ProcessId), command, conversationId: conversation };
+      }).filter((process) => Number.isInteger(process.pid));
+    } catch { return []; }
+  }
   const result = spawnSync("/bin/ps", ["-axo", "pid=,command="], { encoding: "utf8", timeout: 5000 });
   if (result.status !== 0) return [];
   return result.stdout.split(/\r?\n/).map((line) => {
@@ -479,13 +538,17 @@ function publicRoom(room, conversations = []) {
   };
 }
 
+function relayTrashRoot() {
+  return IS_MAC ? path.join(HOME, ".Trash", "Agy Relay Deck") : path.join(STATE_ROOT, "recovery-bin");
+}
+
 function moveRoomBranchesToTrash(room, nextState = "cleaned") {
   if (!UUID_RE.test(room.id)) throw new Error("房间编号不合法。");
   const branchIds = (room.branches || []).map((branch) => branch.conversationId);
   const blocking = activeAgyForConversations(branchIds);
   if (blocking.length) throw new Error(`上一代仍有 ${blocking.length} 个分支窗口运行，请只关闭这些旧窗口后再清理。`);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const trashRoot = path.join(HOME, ".Trash", "Agy Relay Deck", `${stamp}-${room.id}`);
+  const trashRoot = path.join(relayTrashRoot(), `${stamp}-${room.id}`);
   fs.mkdirSync(trashRoot, { recursive: true, mode: 0o700 });
   const conversations = queryConversations(200);
   const byId = new Map(conversations.map((item) => [item.id, item]));
@@ -580,7 +643,7 @@ function retireRoomBranch(room, branch) {
   if (activeAgyForConversations([branch.conversationId]).length) throw new Error(`窗口 ${branch.label} 仍在运行，请先关闭它。`);
   if (branchHasActiveDescendants(room, branch.label)) throw new Error(`窗口 ${branch.label} 仍有活跃子分支，请先处理子分支，避免破坏记忆链。`);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const trashRoot = path.join(HOME, ".Trash", "Agy Relay Deck", "retired-branches", `${stamp}-${room.id}-${branch.label}`);
+  const trashRoot = path.join(relayTrashRoot(), "retired-branches", `${stamp}-${room.id}-${branch.label}`);
   fs.mkdirSync(trashRoot, { recursive: true, mode: 0o700 });
   const conversation = queryConversations(200).find((item) => item.id === branch.conversationId);
   const moves = [];
@@ -661,14 +724,21 @@ function operationRunning() {
 }
 
 function sqliteBinary() {
-  return findExecutable(["/usr/bin/sqlite3", "/opt/homebrew/bin/sqlite3", "/usr/local/bin/sqlite3"]);
+  return findExecutable(["sqlite3", "/usr/bin/sqlite3", "/opt/homebrew/bin/sqlite3", "/usr/local/bin/sqlite3"]);
 }
 
 function conversationDbStats(conversationId) {
   if (!UUID_RE.test(conversationId)) throw new Error("对话编号不合法。");
   const sqlite = sqliteBinary();
   const db = path.join(AGY_ROOT, "conversations", `${conversationId}.db`);
-  if (!sqlite || !fs.existsSync(db)) throw new Error(`找不到对话数据库 ${conversationId.slice(0, 8)}…`);
+  if (!fs.existsSync(db)) throw new Error(`找不到对话数据库 ${conversationId.slice(0, 8)}…`);
+  if (!sqlite) {
+    const result = runPythonSync([SQLITE_BRIDGE, "stats", db], { timeout: 20_000 });
+    if (result.status !== 0 || !result.stdout.trim()) throw new Error("无法读取对话轨迹统计，请安装 Python 3。");
+    const row = JSON.parse(result.stdout);
+    if (row.integrity !== "ok") throw new Error("对话数据库完整性检查未通过。");
+    return { stepCount: Number(row.stepCount || 0), maxStepIndex: Number(row.maxStepIndex ?? -1) };
+  }
   const sql = "SELECT count(*) AS step_count, coalesce(max(idx), -1) AS max_step_index FROM steps;";
   let result = spawnSync(sqlite, ["-readonly", "-json", db, sql], { encoding: "utf8", timeout: 20_000 });
   if (result.status !== 0) {
@@ -856,9 +926,11 @@ async function createPlaceholder(agy, workspace, marker) {
 }
 
 async function transplantConversation(sourceId, targetId, title) {
+  const python = pythonRuntime();
+  if (!python) throw new Error("找不到 Python 3。请先安装 Python 3 并加入 PATH。");
   const transplant = await runProcess(
-    "/usr/bin/python3",
-    [TRANSPLANTER, "--source-root", AGY_ROOT, "--source-id", sourceId, "--target-root", AGY_ROOT, "--target-id", targetId, "--title", title, "--apply", "--yes", "--json"],
+    python.command,
+    [...python.prefix, TRANSPLANTER, "--source-root", AGY_ROOT, "--source-id", sourceId, "--target-root", AGY_ROOT, "--target-id", targetId, "--title", title, "--apply", "--yes", "--json"],
     { timeout: 20 * 60_000 },
   );
   let report;
@@ -1231,7 +1303,9 @@ async function performHandoff(job) {
     updateJob(job, { targetConversationId });
 
     addStep(job, "移植完整上下文", "running", "复制轨迹、工具记录和 brain；保留新账号绑定");
-    const transplant = await runProcess("/usr/bin/python3", [TRANSPLANTER, "--source-root", AGY_ROOT, "--source-id", job.sourceConversationId, "--target-root", AGY_ROOT, "--target-id", targetConversationId, "--title", job.sourceTitle || source?.title || "接力对话", "--apply", "--yes", "--json"], { timeout: 15 * 60_000 });
+    const python = pythonRuntime();
+    if (!python) throw new Error("找不到 Python 3。请先安装 Python 3 并加入 PATH。");
+    const transplant = await runProcess(python.command, [...python.prefix, TRANSPLANTER, "--source-root", AGY_ROOT, "--source-id", job.sourceConversationId, "--target-root", AGY_ROOT, "--target-id", targetConversationId, "--title", job.sourceTitle || source?.title || "接力对话", "--apply", "--yes", "--json"], { timeout: 15 * 60_000 });
     let report;
     try { report = JSON.parse(transplant.stdout); } catch { throw new Error("移植工具完成但验证报告不可读，请不要打开目标对话。"); }
     job.steps[job.steps.length - 1] = { label: "移植完整上下文", state: "done", detail: `${report.copied_rows?.steps?.toLocaleString?.() || report.copied_rows?.steps || 0} 条轨迹已复制`, at: new Date().toISOString() };
@@ -1288,15 +1362,24 @@ function launchConversation(conversationId, workspace) {
   if (!/^[0-9a-f-]{36}$/i.test(conversationId)) throw new Error("对话编号不合法。");
   const cwd = workspace && fs.existsSync(workspace) ? workspace : HOME;
   fs.mkdirSync(STATE_ROOT, { recursive: true, mode: 0o700 });
-  const commandFile = path.join(STATE_ROOT, `open-${conversationId}.command`);
-  const shellQuote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
   const launchArgs = [
     ...(loadSettings().dangerouslySkipPermissions ? ["--dangerously-skip-permissions"] : []),
     "--conversation",
     conversationId,
   ];
-  fs.writeFileSync(commandFile, `#!/bin/zsh\ncd ${shellQuote(cwd)}\nexec ${shellQuote(agy)} ${launchArgs.map(shellQuote).join(" ")}\n`, { mode: 0o700 });
-  const opened = spawnSync("/usr/bin/open", [commandFile], { encoding: "utf8" });
+  let commandFile;
+  let opened;
+  if (IS_WINDOWS) {
+    commandFile = path.join(STATE_ROOT, `open-${conversationId}.cmd`);
+    const cmdQuote = (value) => `"${String(value).replaceAll('"', '""')}"`;
+    fs.writeFileSync(commandFile, `@echo off\r\ncd /d ${cmdQuote(cwd)}\r\n${cmdQuote(agy)} ${launchArgs.map(cmdQuote).join(" ")}\r\n`, { mode: 0o700 });
+    opened = spawnSync(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "start", "", commandFile], { encoding: "utf8", windowsHide: true });
+  } else {
+    commandFile = path.join(STATE_ROOT, `open-${conversationId}.command`);
+    const shellQuote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+    fs.writeFileSync(commandFile, `#!/bin/zsh\ncd ${shellQuote(cwd)}\nexec ${shellQuote(agy)} ${launchArgs.map(shellQuote).join(" ")}\n`, { mode: 0o700 });
+    opened = spawnSync("/usr/bin/open", [commandFile], { encoding: "utf8" });
+  }
   if (opened.status !== 0) throw new Error(opened.stderr || "无法打开终端。");
 }
 
@@ -1311,6 +1394,8 @@ async function statusPayload() {
   const runningAgy = DEMO ? [] : agyProcessDetails();
   return {
     demo: DEMO,
+    platform: process.platform,
+    recoveryLabel: IS_MAC ? "macOS 废纸篓" : "Agy Relay 本地恢复区",
     manager: { online, installed: Boolean(managerBinary()), accountCount: readAccounts().length },
     agy: {
       installed: Boolean(agyBinary()),
@@ -1639,5 +1724,13 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`Agy Relay Deck: http://${HOST}:${PORT}`);
   console.log("仅监听本机；关闭此终端即可停止面板。");
-  if (process.env.NO_OPEN !== "1") spawn("/usr/bin/open", [`http://${HOST}:${PORT}`], { detached: true, stdio: "ignore" }).unref();
+  if (process.env.NO_OPEN !== "1") {
+    const url = `http://${HOST}:${PORT}`;
+    const opener = IS_WINDOWS
+      ? { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", "start", "", url] }
+      : IS_MAC
+        ? { command: "/usr/bin/open", args: [url] }
+        : { command: "xdg-open", args: [url] };
+    try { spawn(opener.command, opener.args, { detached: true, stdio: "ignore", windowsHide: true }).unref(); } catch { /* browser can be opened manually */ }
+  }
 });

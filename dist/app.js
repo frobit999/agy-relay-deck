@@ -32,6 +32,7 @@ function maskedEmail(email = "") {
   const [name, domain] = email.split("@");
   return domain ? `${name.slice(0, 2)}•••@${domain}` : email;
 }
+function recoveryLabel() { return state.data?.recoveryLabel || "本地恢复区"; }
 
 async function request(url, options = {}) {
   const response = await fetch(url, {
@@ -139,13 +140,13 @@ function roomCard(room, primary = false) {
   return `<article class="room-card ${primary ? "primary-room" : ""} ${active ? "active" : ""}" data-room="${escapeHtml(room.id)}" data-workspace="${escapeHtml(room.workspace || "")}">
     <div class="room-card-head"><div class="room-card-title"><strong>${escapeHtml(roomTitle(room))}</strong><small>${escapeHtml(room.id.slice(0, 8))} · ${room.branches.length} 个窗口 · ${escapeHtml(relativeTime(room.updatedAt))}</small></div><span class="room-state ${escapeHtml(room.state)}">${escapeHtml(roomStateLabel(room.state))}</span></div>
     ${room.branches.length ? `<div class="branch-grid">${room.branches.map((branch) => { const branchRunning = runningIds.has(branch.conversationId.toLowerCase()); return `<div class="branch-card"><div class="branch-top"><strong><span>窗口 ${escapeHtml(branch.label)}${branch.clonedFromLabel ? `<em>从 ${escapeHtml(branch.clonedFromLabel)} 分支</em>` : ""}</span><span>${branch.addedSteps === null ? "—" : `+${Number(branch.addedSteps).toLocaleString()}`}</span></strong>${primary && ["ready","handoff_pending_verification"].includes(room.state) ? `<div class="branch-actions"><button class="branch-button" data-action="launch-branch" data-id="${escapeHtml(branch.conversationId)}" ${branchRunning ? "disabled" : ""}>${branchRunning ? "运行中" : "打开"}</button>${room.state === "ready" && room.branches.length < 6 ? `<button class="branch-button clone" data-action="clone-branch" data-id="${escapeHtml(branch.conversationId)}" ${branchRunning || !toolsOnline ? "disabled" : ""}>${branchRunning ? "关闭后复制" : !toolsOnline ? "先启动 Tools" : "复制"}</button>` : ""}${room.state === "ready" && room.branches.length > 1 ? `<button class="branch-button retire" data-action="retire-branch" data-id="${escapeHtml(branch.conversationId)}" ${branchRunning ? "disabled" : ""}>${branchRunning ? "关闭后退役" : "退役"}</button>` : ""}</div>` : ""}</div><small>${escapeHtml(branch.conversationId.slice(0, 8))} · ${branch.currentStepCount === null ? "—" : Number(branch.currentStepCount).toLocaleString()} steps${branch.summaryPending ? "（复制已验证）" : ""} · ${escapeHtml(formatBytes(branch.currentBytes))}</small></div>`; }).join("")}</div>` : ""}
-    ${room.retiredBranches?.length ? `<details class="retired-window-list"><summary>已退役窗口 ${room.retiredBranches.length} 个</summary><div>${room.retiredBranches.map((branch) => `<span><strong>${escapeHtml(branch.label)}</strong><small>${escapeHtml(branch.conversationId.slice(0,8))} · ${escapeHtml(formatBytes(branch.logicalBytes))}</small>${branch.canRestore ? `<button class="branch-button" data-action="restore-branch" data-label="${escapeHtml(branch.label)}">恢复</button>` : '<em>废纸篓中已不存在</em>'}</span>`).join("")}</div></details>` : ""}
+    ${room.retiredBranches?.length ? `<details class="retired-window-list"><summary>已退役窗口 ${room.retiredBranches.length} 个</summary><div>${room.retiredBranches.map((branch) => `<span><strong>${escapeHtml(branch.label)}</strong><small>${escapeHtml(branch.conversationId.slice(0,8))} · ${escapeHtml(formatBytes(branch.logicalBytes))}</small>${branch.canRestore ? `<button class="branch-button" data-action="restore-branch" data-label="${escapeHtml(branch.label)}">恢复</button>` : '<em>恢复文件已不存在</em>'}</span>`).join("")}</div></details>` : ""}
     ${showProgress ? `<div class="room-progress">${steps.map((step) => `<div class="job-step ${escapeHtml(step.state)}"><i></i><span><strong>${escapeHtml(step.label)}</strong>${step.detail ? `<small>${escapeHtml(step.detail)}</small>` : ""}</span></div>`).join("")}${room.error ? `<div class="room-error">${escapeHtml(room.error)}</div>` : ""}</div>` : ""}
     ${roomCanMerge(room) ? `<div class="room-controls handoff-controls"><div class="running-copy"><strong>${roomRunningCount ? `${roomRunningCount}/${room.branches.length} 个窗口正在运行` : "窗口当前已关闭"}</strong><small>${running ? "关闭所有 agy 窗口后才能换号" : "可以单独打开，也可以整房间换号"}</small></div><button class="button secondary-button launch-room" data-action="launch-room" ${missingCount === 0 ? "disabled" : ""}>${missingCount === 0 ? "全部运行中" : roomRunningCount ? `打开其余 ${missingCount} 个` : "打开全部窗口"}</button><div class="handoff-form"><select data-role="handoff-account">${handoffAccounts}</select><button class="button primary-button" data-action="handoff-room" ${running ? "disabled" : ""}>整房间换号</button></div></div><details class="advanced-room-actions"><summary>高级操作：汇合三个分支</summary><div class="room-controls merge-controls"><select data-role="primary">${primaryOptions}</select><select data-role="merge-account">${mergeAccounts}</select><button class="button secondary-button" data-action="merge-room" ${running || totalAdded === 0 ? "disabled" : ""}>${totalAdded === 0 ? "暂无增量" : "汇合成母会话"}</button></div></details>` : ""}
     ${room.state === "handoff_pending_verification" ? `<div class="room-canonical handoff-verification"><div><strong>新账号的三个窗口已复制并打开</strong><small>分别确认 A、B、C 的近期任务后，再完成接力。</small></div><div class="history-actions"><button class="mini-button" data-action="launch-room" ${running ? "disabled" : ""}>重新打开</button><button class="mini-button" data-action="verify-handoff">三条都正常，完成接力</button></div></div>` : ""}
     ${room.state === "handoff_source_pending_verification" ? `<div class="room-canonical"><div><strong>接力前恢复点</strong><small>新房间确认前，这里的数据不会被清理。</small></div></div>` : ""}
-    ${room.state === "handed_off" ? `<div class="room-canonical"><div><strong>旧账号备份</strong><small>新房间已确认；需要空间时再移到废纸篓。</small></div><div class="history-actions"><button class="mini-button danger" data-action="cleanup-handoff">移到废纸篓</button></div></div>` : ""}
-    ${room.state === "handoff_cleaned" ? `<div class="room-canonical"><div><strong>旧副本已收纳</strong><small>清空废纸篓前仍可恢复。</small></div>${room.canRestore ? '<div class="history-actions"><button class="mini-button danger" data-action="restore-room">恢复旧窗口</button></div>' : ""}</div>` : ""}
+    ${room.state === "handed_off" ? `<div class="room-canonical"><div><strong>旧账号备份</strong><small>新房间已确认；需要空间时再移到恢复区。</small></div><div class="history-actions"><button class="mini-button danger" data-action="cleanup-handoff">移到恢复区</button></div></div>` : ""}
+    ${room.state === "handoff_cleaned" ? `<div class="room-canonical"><div><strong>旧副本已收纳</strong><small>清空恢复区前仍可恢复。</small></div>${room.canRestore ? '<div class="history-actions"><button class="mini-button danger" data-action="restore-room">恢复旧窗口</button></div>' : ""}</div>` : ""}
     ${canonicalReady ? `<div class="room-canonical"><div><strong>唯一母会话</strong><small>${escapeHtml(room.canonicalConversationId.slice(0, 8))} · ${room.mergeShardCount || 0} 个记忆分片${room.cleanupLogicalBytes ? ` · 已收纳 ${escapeHtml(formatBytes(room.cleanupLogicalBytes))}` : ""}</small></div><div class="history-actions"><button class="mini-button" data-action="launch-canonical" data-id="${escapeHtml(room.canonicalConversationId)}">打开母会话</button>${["merged","merged_pending_verification"].includes(room.state) ? '<button class="mini-button" data-action="verify-room">确认母会话正常</button>' : ""}${["verified","cleaned"].includes(room.state) ? `<button class="mini-button" data-action="reseed" data-id="${escapeHtml(room.canonicalConversationId)}">开启下一代</button>` : ""}${room.state === "verified" ? '<button class="mini-button danger" data-action="cleanup-room">收纳分支</button>' : ""}${room.state === "cleaned" && room.canRestore ? '<button class="mini-button danger" data-action="restore-room">恢复分支</button>' : ""}</div></div>` : ""}
     ${room.error && !active && !/failed/.test(room.state) ? `<div class="room-error">${escapeHtml(room.error)}</div>` : ""}
   </article>`;
@@ -240,7 +241,7 @@ function bindRoomActions() {
     const conversationId = button.dataset.id;
     const branch = state.data.rooms.find((room) => room.id === roomId)?.branches.find((item) => item.conversationId === conversationId);
     if (!branch) return toast("找不到这个窗口");
-    if (!confirm(`把窗口 ${branch.label} 从活跃房间退役并移到 macOS 废纸篓？其他窗口不会修改；清空废纸篓前可以恢复。`)) return;
+    if (!confirm(`把窗口 ${branch.label} 从活跃房间退役并移到${recoveryLabel()}？其他窗口不会修改；清空恢复区前可以恢复。`)) return;
     try {
       const room = await request(`/api/rooms/${roomId}/branches/${conversationId}/retire`, { method:"POST", body:"{}" });
       replaceRoom(room); renderRooms(state.data.rooms); await loadStatus(false); toast(`窗口 ${branch.label} 已安全退役`);
@@ -250,7 +251,7 @@ function bindRoomActions() {
     const card = button.closest(".room-card");
     const roomId = card.dataset.room;
     const label = button.dataset.label;
-    if (!confirm(`从废纸篓恢复窗口 ${label} 到当前房间？`)) return;
+    if (!confirm(`从${recoveryLabel()}恢复窗口 ${label} 到当前房间？`)) return;
     try {
       const room = await request(`/api/rooms/${roomId}/retired/${encodeURIComponent(label)}/restore`, { method:"POST", body:"{}" });
       replaceRoom(room); renderRooms(state.data.rooms); await loadStatus(false); toast(`窗口 ${label} 已恢复`);
@@ -278,7 +279,7 @@ function bindRoomActions() {
   });
   document.querySelectorAll('[data-action="cleanup-handoff"]').forEach((button) => button.onclick = async () => {
     const roomId = button.closest(".room-card").dataset.room;
-    if (!confirm("把接力前的旧 A/B/C 移到 macOS 废纸篓吗？新账号房间不会受影响，清空废纸篓前仍可恢复。")) return;
+    if (!confirm(`把接力前的旧 A/B/C 移到${recoveryLabel()}吗？新账号房间不会受影响，清空恢复区前仍可恢复。`)) return;
     try {
       const room = await request(`/api/rooms/${roomId}/cleanup-handoff`, { method:"POST", body:"{}" });
       replaceRoom(room); await loadStatus(false); toast("旧账号副本已移到废纸篓");
@@ -308,13 +309,13 @@ function bindRoomActions() {
   });
   document.querySelectorAll('[data-action="cleanup-room"]').forEach((button) => button.onclick = async () => {
     const roomId = button.closest(".room-card").dataset.room;
-    if (!confirm("将窗口 A/B/C 的数据库、Brain 和附件移到 macOS 废纸篓？母会话会保留，废纸篓清空前可以恢复。")) return;
+    if (!confirm(`将窗口 A/B/C 的数据库、Brain 和附件移到${recoveryLabel()}？母会话会保留，清空恢复区前可以恢复。`)) return;
     try { const room = await request(`/api/rooms/${roomId}/cleanup`, { method:"POST", body:"{}" }); replaceRoom(room); renderRooms(state.data.rooms); await loadStatus(false); toast("上一代分支已移到废纸篓；未清空前可恢复"); }
     catch (error) { toast(error.message); }
   });
   document.querySelectorAll('[data-action="restore-room"]').forEach((button) => button.onclick = async () => {
     const roomId = button.closest(".room-card").dataset.room;
-    if (!confirm("把 A/B/C 从废纸篓恢复到 Antigravity 对话目录吗？")) return;
+    if (!confirm(`把 A/B/C 从${recoveryLabel()}恢复到 Antigravity 对话目录吗？`)) return;
     try { const room = await request(`/api/rooms/${roomId}/restore`, { method:"POST", body:"{}" }); replaceRoom(room); renderRooms(state.data.rooms); await loadStatus(false); toast("上一代分支已恢复"); }
     catch (error) { toast(error.message); }
   });

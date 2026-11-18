@@ -1,6 +1,6 @@
 # Agy Relay Deck
 
-一个仅运行在 macOS 本机的 Antigravity CLI 多账号额度与长对话安全接力面板。
+一个仅监听本机的 Antigravity CLI 多账号额度与长对话安全接力面板，支持 macOS 与 Windows。
 
 它把账号切换、本地对话移植和多窗口记忆汇合组合成一个有备份、验证与回滚的一键流程：账号负责额度身份，本地数据库负责上下文连续性。
 
@@ -71,7 +71,7 @@
 
 ### 前置条件
 
-- macOS
+- macOS 13+ 或 Windows 11
 - Node.js 20 或更高版本
 - Python 3
 - 已安装并登录的 Antigravity CLI（`agy`）
@@ -81,13 +81,13 @@
 
 ### 启动
 
-下载或克隆项目后，双击 `start.command`。浏览器会自动打开：
+macOS 下载或克隆项目后，双击 `start.command`；Windows 双击 `start-windows.cmd`。浏览器会自动打开：
 
 ```text
 http://127.0.0.1:7331
 ```
 
-如果 macOS 第一次阻止脚本，请在 Finder 中右键 `start.command`，选择“打开”。也可以在项目目录运行：
+如果 macOS 第一次阻止脚本，请在 Finder 中右键 `start.command`，选择“打开”。Windows 若找不到 Node.js，请先安装 Node.js 20+。两端都可以在项目目录运行：
 
 ```sh
 npm start
@@ -141,6 +141,7 @@ npm start
 - `--dangerously-skip-permissions` 必须由用户显式开启，默认关闭
 - 汇合档案保存在新母会话自己的 brain 目录，便于审计和后续接力
 - 分支记录按共同分裂点的 step index 提取，不会重复灌入母记忆
+- Windows 使用用户目录下的 Agy Relay 恢复区代替 macOS 废纸篓，恢复清单行为一致
 
 更多边界与漏洞报告方式见 [SECURITY.md](SECURITY.md)。
 
